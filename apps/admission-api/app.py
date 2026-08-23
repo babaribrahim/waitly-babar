@@ -26,6 +26,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 TABLE_NAME = os.environ["TABLE_NAME"]
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
@@ -42,6 +43,20 @@ dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION, config=BOTO_CONFIG
 table = dynamodb.Table(TABLE_NAME)
 
 app = FastAPI(title="Waitly Admission API")
+
+# The frontend calls this ALB directly from the visitor's browser (no
+# Route 53/CloudFront in front of it yet - deliberately deferred, see
+# CLAUDE.md). Without CORS headers, browsers silently block that
+# cross-origin fetch. Permissive for now, same reasoning as the Room
+# Admin API's API Gateway CORS config: the frontend's real origin isn't
+# known yet either way (no domain, possibly served from a laptop's
+# localhost during the demo) - worth tightening once one exists.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 
 def _now_iso() -> str:
@@ -110,6 +125,7 @@ def issue_token(room_id: str, visitor_number: int):
     if "Item" not in resp:
         raise HTTPException(status_code=404, detail="room not found")
 
+    protected_url = resp["Item"].get("protectedUrl")
     admitted_count = int(resp["Item"].get("admittedCount", 0))
     if visitor_number > admitted_count:
         raise HTTPException(status_code=403, detail="visitor not yet admitted")
@@ -139,4 +155,7 @@ def issue_token(room_id: str, visitor_number: int):
             raise HTTPException(status_code=409, detail="token already issued for this visitor")
         raise
 
-    return {"token": token}
+    # protectedUrl travels with the token so the frontend knows where to
+    # send the visitor without a second call — this is the one moment
+    # that redirect target is actually needed.
+    return {"token": token, "protectedUrl": protected_url}

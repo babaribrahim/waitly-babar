@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waitly — Queue</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 2rem;
+  }
+
+  .screen {
+    width: 100%;
+    max-width: 720px;
+    text-align: center;
+  }
+
+  .room-name {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .room-name .status-dot {
+    vertical-align: middle;
+  }
+
+  /* --- Waiting state: the position number dominates the screen --- */
+  .position-label {
+    margin-bottom: 0.5rem;
+  }
+
+  .position-number {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(5rem, 22vw, 13rem);
+    font-weight: 700;
+    line-height: 1;
+    color: var(--accent);
+    text-shadow: 0 0 40px var(--accent-glow), 0 0 100px var(--accent-glow);
+    letter-spacing: -0.02em;
+  }
+
+  .position-number.pulse {
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+
+  .position-number.loading {
+    color: var(--text-dim);
+    text-shadow: none;
+    opacity: 0.5;
+    animation: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.82; }
+  }
+
+  .sub-stat {
+    margin-top: 2rem;
+    font-size: 1.05rem;
+    color: var(--text-muted);
+  }
+
+  .sub-stat strong {
+    color: var(--text);
+    font-family: var(--font-mono);
+  }
+
+  .hint {
+    margin-top: 3rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  /* --- Admitted state --- */
+  .admitted-icon {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 1.5rem;
+    border-radius: 50%;
+    border: 2px solid var(--healthy);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--healthy);
+    font-size: 2rem;
+    box-shadow: 0 0 30px rgba(47, 212, 122, 0.35);
+  }
+
+  .admitted-title {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+  }
+
+  .admitted-sub {
+    color: var(--text-muted);
+    margin-bottom: 2rem;
+  }
+
+  .countdown {
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+  }
+
+  /* --- Error / not-found state --- */
+  .error-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--error);
+    margin-bottom: 0.5rem;
+  }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="screen">
+  <div class="room-name" id="roomName">Loading…</div>
+
+  <!-- Waiting state -->
+  <div id="waitingState" hidden>
+    <div class="eyebrow position-label">Your position in line</div>
+    <div class="position-number pulse mono loading" id="positionNumber">0</div>
+    <div class="sub-stat" id="subStat"></div>
+    <div class="hint">This page updates automatically. Keep it open — you don't need to refresh.</div>
+  </div>
+
+  <!-- Admitted state -->
+  <div id="admittedState" hidden>
+    <div class="admitted-icon">&#10003;</div>
+    <div class="admitted-title">You're in!</div>
+    <div class="admitted-sub" id="admittedSub">Redirecting you now…</div>
+    <div class="countdown mono" id="countdown"></div>
+    <div style="margin-top: 1.5rem;">
+      <button class="btn btn-primary" id="continueBtn" hidden>Continue now</button>
+    </div>
+  </div>
+
+  <!-- Error state -->
+  <div id="errorState" hidden>
+    <div class="error-title">Something went wrong</div>
+    <div class="admitted-sub" id="errorMessage">This room could not be found.</div>
+  </div>
+</div>
+
+<script>
+  // Admission API's ALB DNS name. No Route 53/CloudFront in front of it yet
+  // (deliberately deferred — see CLAUDE.md) so this is the raw AWS-generated
+  // address. Override with ?api=... for local testing against a different
+  // stack.
+  const DEFAULT_API_BASE = "http://waitly-hw-alb-1872850869.us-west-2.elb.amazonaws.com";
+
+  const params = new URLSearchParams(location.search);
+  const apiBase = (params.get("api") || DEFAULT_API_BASE).replace(/\/$/, "");
+  const roomId = params.get("room");
+
+  const roomNameEl = document.getElementById("roomName");
+  const waitingEl = document.getElementById("waitingState");
+  const admittedEl = document.getElementById("admittedState");
+  const errorEl = document.getElementById("errorState");
+  const positionEl = document.getElementById("positionNumber");
+  const subStatEl = document.getElementById("subStat");
+  const admittedSubEl = document.getElementById("admittedSub");
+  const countdownEl = document.getElementById("countdown");
+  const continueBtn = document.getElementById("continueBtn");
+  const errorMessageEl = document.getElementById("errorMessage");
+
+  function showError(message) {
+    waitingEl.hidden = true;
+    admittedEl.hidden = true;
+    errorEl.hidden = false;
+    errorMessageEl.textContent = message;
+    roomNameEl.textContent = "";
+  }
+
+  if (!roomId) {
+    showError("No room specified. This link is missing a room id.");
+    throw new Error("no room id");
+  }
+
+  roomNameEl.innerHTML = `<span class="status-dot healthy"></span>Room: ${roomId}`;
+
+  const storageKey = `waitly-visitor-${roomId}`;
+
+  function loadVisitor() {
+    try {
+      return JSON.parse(sessionStorage.getItem(storageKey) || "null");
+    } catch {
+      return null;
+    }
+  }
+
+  function saveVisitor(data) {
+    sessionStorage.setItem(storageKey, JSON.stringify(data));
+  }
+
+  async function joinRoom() {
+    const resp = await fetch(`${apiBase}/rooms/${roomId}/join`, { method: "POST" });
+    if (!resp.ok) {
+      if (resp.status === 404) throw new Error("This room does not exist.");
+      throw new Error(`Could not join the queue (HTTP ${resp.status}).`);
+    }
+    const data = await resp.json();
+    const visitor = { visitorNumber: data.visitorNumber };
+    saveVisitor(visitor);
+    return visitor;
+  }
+
+  async function checkStatus(visitorNumber) {
+    const resp = await fetch(`${apiBase}/rooms/${roomId}/status/${visitorNumber}`);
+    if (!resp.ok) throw new Error(`Could not check status (HTTP ${resp.status}).`);
+    return resp.json();
+  }
+
+  async function claimToken(visitorNumber) {
+    const resp = await fetch(`${apiBase}/rooms/${roomId}/token/${visitorNumber}`, { method: "POST" });
+    if (!resp.ok) throw new Error(`Could not claim entry (HTTP ${resp.status}).`);
+    return resp.json();
+  }
+
+  function showAdmitted(protectedUrl, token) {
+    waitingEl.hidden = true;
+    admittedEl.hidden = false;
+
+    if (!protectedUrl) {
+      admittedSubEl.textContent = "You've been admitted. No destination is configured for this room.";
+      return;
+    }
+
+    const separator = protectedUrl.includes("?") ? "&" : "?";
+    const destination = `${protectedUrl}${separator}token=${encodeURIComponent(token)}`;
+
+    let secondsLeft = 3;
+    countdownEl.textContent = `Redirecting in ${secondsLeft}…`;
+    continueBtn.hidden = false;
+    continueBtn.onclick = () => { window.location.href = destination; };
+
+    const timer = setInterval(() => {
+      secondsLeft -= 1;
+      if (secondsLeft <= 0) {
+        clearInterval(timer);
+        window.location.href = destination;
+        return;
+      }
+      countdownEl.textContent = `Redirecting in ${secondsLeft}…`;
+    }, 1000);
+  }
+
+  let polling = false;
+
+  async function poll(visitorNumber) {
+    if (polling) return;
+    polling = true;
+    try {
+      const status = await checkStatus(visitorNumber);
+
+      if (status.status === "admitted") {
+        clearInterval(pollTimer);
+        const tokenResp = await claimToken(visitorNumber);
+        showAdmitted(tokenResp.protectedUrl, tokenResp.token);
+        return;
+      }
+
+      waitingEl.hidden = false;
+      positionEl.textContent = status.position;
+      positionEl.classList.remove("loading");
+      subStatEl.innerHTML = status.position === 1
+        ? "You're next."
+        : `<strong>${status.position - 1}</strong> ${status.position - 1 === 1 ? "person" : "people"} ahead of you`;
+    } catch (err) {
+      console.error(err);
+      // Transient network hiccups shouldn't blow away the UI - just skip
+      // this tick and try again next interval.
+    } finally {
+      polling = false;
+    }
+  }
+
+  let pollTimer;
+
+  (async () => {
+    try {
+      let visitor = loadVisitor();
+      if (!visitor) {
+        visitor = await joinRoom();
+      }
+
+      await poll(visitor.visitorNumber);
+      pollTimer = setInterval(() => poll(visitor.visitorNumber), 3000);
+    } catch (err) {
+      showError(err.message || String(err));
+    }
+  })();
+</script>
+</body>
+</html>

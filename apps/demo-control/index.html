@@ -18,117 +18,187 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Waitly demo control</title>
+<link rel="stylesheet" href="../frontend/assets/style.css">
 <style>
-  :root {
-    --bg: #0f1115;
-    --panel: #171a21;
-    --border: #2a2e38;
-    --text: #e8eaed;
-    --muted: #8b90a0;
-    --healthy: #2fbf71;
-    --slow: #e0a52c;
-    --error: #e05252;
-    --accent: #5b8def;
-  }
-  * { box-sizing: border-box; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    padding: 2rem;
+    padding: 2.5rem 1.5rem;
   }
-  .wrap { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
-  .subtitle { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.5rem; }
+
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 1.1rem;
+    margin: 0 0 0.25rem;
+    font-weight: 700;
+  }
+
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin: 0 0 2rem;
+  }
+
   .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.25rem;
-    margin-bottom: 1rem;
+    padding: 1.5rem;
+    margin-bottom: 1.25rem;
   }
-  .panel h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.75rem; }
-  .row { display: flex; gap: 0.5rem; align-items: center; }
-  input[type=text] {
+
+  .panel h2 {
+    margin: 0 0 1rem;
+  }
+
+  .row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  /* --- The rate: the number people watch during the demo --- */
+  .rate-panel {
+    text-align: center;
+    padding: 2.5rem 1.5rem;
+  }
+
+  .rate-value {
+    font-size: clamp(5rem, 22vw, 13rem);
+    font-weight: 700;
+    line-height: 1;
+    color: var(--accent);
+    text-shadow: 0 0 40px var(--accent-glow), 0 0 100px var(--accent-glow);
+    letter-spacing: -0.02em;
+    transition: opacity 0.2s ease;
+  }
+
+  .rate-value.loading {
+    color: var(--text-dim);
+    text-shadow: none;
+    opacity: 0.5;
+  }
+
+  .rate-unit {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 0.75rem;
+  }
+
+  .mode-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-top: 1.25rem;
+    font-size: 0.95rem;
+  }
+
+  .mode-buttons {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: 1.5rem;
+  }
+
+  .mode-buttons .btn {
     flex: 1;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 0.5rem 0.6rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-  }
-  button {
-    background: var(--accent);
-    color: white;
-    border: none;
-    padding: 0.5rem 0.9rem;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  button:hover { filter: brightness(1.1); }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .mode-buttons { display: flex; gap: 0.6rem; margin-top: 0.75rem; }
-  .mode-buttons button { flex: 1; padding: 0.75rem; font-size: 0.9rem; font-weight: 600; }
-  .btn-healthy { background: var(--healthy); }
-  .btn-slow { background: var(--slow); }
-  .btn-error { background: var(--error); }
-  .badge {
-    display: inline-block;
-    padding: 0.3rem 0.8rem;
-    border-radius: 999px;
-    font-weight: 600;
+    padding: 0.85rem;
     font-size: 0.9rem;
   }
-  .badge.healthy { background: color-mix(in srgb, var(--healthy) 25%, transparent); color: var(--healthy); }
-  .badge.slow { background: color-mix(in srgb, var(--slow) 25%, transparent); color: var(--slow); }
-  .badge.error { background: color-mix(in srgb, var(--error) 25%, transparent); color: var(--error); }
-  .badge.unknown { background: color-mix(in srgb, var(--muted) 25%, transparent); color: var(--muted); }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 0.75rem; }
-  .stat { text-align: center; }
-  .stat .value { font-size: 1.6rem; font-weight: 700; }
-  .stat .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
-  .footer { color: var(--muted); font-size: 0.75rem; text-align: center; margin-top: 1.5rem; }
-  .error-msg { color: var(--error); font-size: 0.8rem; margin-top: 0.5rem; min-height: 1em; }
+
+  .btn-healthy.active { border-color: var(--healthy); background: rgba(47, 212, 122, 0.12); }
+  .btn-slow.active { border-color: var(--slow); background: rgba(224, 165, 44, 0.12); }
+  .btn-error.active { border-color: var(--error); background: rgba(239, 84, 104, 0.12); }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-top: 1.25rem;
+  }
+
+  .stat {
+    text-align: center;
+  }
+
+  .stat .value {
+    font-size: 1.6rem;
+    font-weight: 700;
+  }
+
+  .stat .label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 0.25rem;
+  }
+
+  .error-msg {
+    color: var(--error);
+    font-size: 0.8rem;
+    margin-top: 0.75rem;
+    min-height: 1em;
+  }
+
+  .footer {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    text-align: center;
+    margin-top: 1.5rem;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    background: var(--bg-panel-raised);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-size: 0.85em;
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Waitly &mdash; Demo Control</h1>
-  <p class="subtitle">Not part of the real product UI. Toggles the protected-site fixture and shows the Queue Controller reacting, live.</p>
+  <p class="subtitle">Not part of the real product UI. Toggle the protected site's health and watch the Queue Controller react, live.</p>
 
   <div class="panel">
-    <h2>Room Admin API endpoint</h2>
+    <h2 class="eyebrow">Room Admin API endpoint</h2>
     <div class="row">
-      <input type="text" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
-      <button id="saveApiBase">Save</button>
+      <input type="text" class="input mono" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
+      <button class="btn" id="saveApiBase">Save</button>
     </div>
   </div>
 
-  <div class="panel">
-    <h2>Protected site mode</h2>
-    <p>Current: <span id="modeBadge" class="badge unknown">unknown</span></p>
+  <div class="panel rate-panel">
+    <div class="eyebrow">Live target rate — Room "<span id="roomId">-</span>"</div>
+    <div class="rate-value mono loading" id="targetRate">0</div>
+    <div class="rate-unit">visitors admitted per Queue Controller tick</div>
+
+    <div class="mode-row">
+      <span class="status-dot unknown" id="modeDot"></span>
+      <span id="modeLabel">unknown</span>
+    </div>
+
     <div class="mode-buttons">
-      <button class="btn-healthy" data-mode="healthy">Healthy</button>
-      <button class="btn-slow" data-mode="slow">Slow</button>
-      <button class="btn-error" data-mode="error">Erroring</button>
+      <button class="btn btn-healthy" data-mode="healthy">Healthy</button>
+      <button class="btn btn-slow" data-mode="slow">Slow</button>
+      <button class="btn btn-error" data-mode="error">Erroring</button>
     </div>
     <div class="error-msg" id="modeError"></div>
   </div>
 
   <div class="panel">
-    <h2>Demo room (<span id="roomId">-</span>)</h2>
-    <div class="stats">
-      <div class="stat"><div class="value" id="targetRate">-</div><div class="label">Target rate</div></div>
-      <div class="stat"><div class="value" id="waiting">-</div><div class="label">Waiting</div></div>
-      <div class="stat"><div class="value" id="admittedCount">-</div><div class="label">Admitted</div></div>
+    <h2 class="eyebrow">Demo room detail</h2>
+    <div class="stats-grid">
+      <div class="stat"><div class="value mono" id="waiting">-</div><div class="label">Waiting</div></div>
+      <div class="stat"><div class="value mono" id="admittedCount">-</div><div class="label">Admitted</div></div>
+      <div class="stat"><div class="value mono" id="lastUpdated">-</div><div class="label">Last updated</div></div>
     </div>
   </div>
 
-  <p class="footer">Polling every 2s. Run <code>scripts/probe_protected_site.py</code> to generate traffic for the metrics to react to.</p>
+  <p class="footer">Polling every 2s. Run <code>python scripts/probe_protected_site.py --rate 3</code> to generate the traffic these metrics depend on.</p>
 </div>
 
 <script>
@@ -144,6 +214,12 @@
     return apiBaseInput.value.trim().replace(/\/$/, "");
   }
 
+  function setActiveModeButton(mode) {
+    document.querySelectorAll(".mode-buttons button").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === mode);
+    });
+  }
+
   async function refresh() {
     const base = apiBase();
     if (!base) return;
@@ -151,15 +227,21 @@
       const resp = await fetch(`${base}/demo/status`);
       const data = await resp.json();
 
-      const badge = document.getElementById("modeBadge");
-      badge.textContent = data.mode;
-      badge.className = "badge " + (["healthy", "slow", "error"].includes(data.mode) ? data.mode : "unknown");
+      const dot = document.getElementById("modeDot");
+      const label = document.getElementById("modeLabel");
+      const knownModes = ["healthy", "slow", "error"];
+      dot.className = "status-dot " + (knownModes.includes(data.mode) ? data.mode : "unknown");
+      label.textContent = data.mode;
+      setActiveModeButton(data.mode);
 
       if (data.room) {
         document.getElementById("roomId").textContent = data.room.roomId;
-        document.getElementById("targetRate").textContent = data.room.targetRate;
+        const rateEl = document.getElementById("targetRate");
+        rateEl.textContent = data.room.targetRate;
+        rateEl.classList.remove("loading");
         document.getElementById("waiting").textContent = data.room.waiting;
         document.getElementById("admittedCount").textContent = data.room.admittedCount;
+        document.getElementById("lastUpdated").textContent = new Date().toLocaleTimeString();
       }
     } catch (err) {
       console.error("refresh failed", err);

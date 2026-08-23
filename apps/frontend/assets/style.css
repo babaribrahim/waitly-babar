@@ -1,0 +1,138 @@
+/* Waitly frontend — shared design system.
+   Minimal, dark, monitoring-dashboard aesthetic, not consumer-app.
+   Deep near-black background, one neon accent used sparingly (numbers
+   that matter and active states only — never decoratively). */
+
+:root {
+  --bg: #06070c;
+  --bg-panel: #0d1117;
+  --bg-panel-raised: #131a24;
+  --border: #1f2733;
+  --border-bright: #2c3648;
+
+  --text: #e8ecf1;
+  --text-muted: #8a93a3;
+  --text-dim: #4b5563;
+
+  --accent: #22e5ff;
+  --accent-dim: rgba(34, 229, 255, 0.14);
+  --accent-glow: rgba(34, 229, 255, 0.35);
+
+  --healthy: #2fd47a;
+  --slow: #e0a52c;
+  --error: #ef5468;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.eyebrow {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.btn {
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: 1px solid var(--border-bright);
+  background: var(--bg-panel-raised);
+  color: var(--text);
+  padding: 0.65rem 1.1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #00161c;
+}
+
+.btn-primary:hover {
+  background: #45ecff;
+  border-color: #45ecff;
+}
+
+.input {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  border: 1px solid var(--border-bright);
+  color: var(--text);
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 50%;
+  margin-right: 0.5em;
+}
+
+.status-dot.healthy { background: var(--healthy); box-shadow: 0 0 8px var(--healthy); }
+.status-dot.slow { background: var(--slow); box-shadow: 0 0 8px var(--slow); }
+.status-dot.error { background: var(--error); box-shadow: 0 0 8px var(--error); }
+.status-dot.unknown { background: var(--text-dim); }
+
+::selection {
+  background: var(--accent-dim);
+}

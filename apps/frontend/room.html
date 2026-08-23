@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waitly — Room dashboard</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  body { padding: 2.5rem 1.5rem; }
+  .wrap { max-width: 780px; margin: 0 auto; }
+
+  .back { color: var(--text-muted); font-size: 0.85rem; text-decoration: none; display: inline-block; margin-bottom: 1.5rem; }
+  .back:hover { color: var(--accent); }
+
+  header { margin-bottom: 2rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; font-weight: 700; }
+  .room-id { color: var(--text-dim); font-size: 0.8rem; }
+
+  .panel { padding: 1.5rem; margin-bottom: 1.25rem; }
+
+  /* --- Big stats row --- */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+  }
+
+  .stat-card {
+    text-align: center;
+    padding: 1.5rem 1rem;
+  }
+
+  .stat-card .value {
+    font-size: 2.2rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+  }
+
+  .stat-card.highlight .value { color: var(--accent); text-shadow: 0 0 24px var(--accent-glow); }
+
+  .stat-card .label {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+  }
+
+  .rate-control { display: flex; gap: 0.6rem; align-items: flex-end; margin-top: 1rem; }
+  .rate-control .input { max-width: 140px; }
+
+  .link-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    word-break: break-all;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .copy-btn { font-size: 0.72rem; padding: 0.35rem 0.7rem; flex-shrink: 0; }
+
+  .key-entry { text-align: center; padding: 3rem 1.5rem; }
+  .key-entry .input { max-width: 360px; margin: 1rem auto 0; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="index.html">&larr; Rooms</a>
+
+  <div id="keyEntryView" hidden>
+    <div class="panel key-entry">
+      <div class="eyebrow">Admin key needed</div>
+      <p style="color: var(--text-muted); margin-top: 0.5rem;">This browser doesn't have a saved admin key for this room.</p>
+      <input class="input mono" id="manualKey" placeholder="Paste admin key">
+      <div style="margin-top: 1rem;"><button class="btn btn-primary" id="unlockBtn">Unlock dashboard</button></div>
+      <div class="error-msg" id="keyError" style="color: var(--error); margin-top: 0.75rem; font-size: 0.85rem;"></div>
+    </div>
+  </div>
+
+  <div id="dashboardView" hidden>
+    <header>
+      <h1 id="roomName">Loading…</h1>
+      <div class="room-id mono" id="roomIdLabel"></div>
+    </header>
+
+    <div class="stats-row">
+      <div class="stat-card panel"><div class="value" id="waiting">-</div><div class="label">Waiting</div></div>
+      <div class="stat-card panel highlight"><div class="value" id="targetRate">-</div><div class="label">Target rate</div></div>
+      <div class="stat-card panel"><div class="value" id="admittedCount">-</div><div class="label">Admitted</div></div>
+      <div class="stat-card panel"><div class="value" id="avgWait">-</div><div class="label">Avg wait</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">Adjust target rate</div>
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0.5rem 0 0;">The Queue Controller keeps adjusting from here automatically (AIMD) — this sets a new starting point mid-event.</p>
+      <div class="rate-control">
+        <input class="input mono" id="newRate" type="number" min="1">
+        <button class="btn btn-primary" id="setRateBtn">Update</button>
+      </div>
+      <div class="error-msg" id="rateError" style="color: var(--error); margin-top: 0.6rem; font-size: 0.85rem;"></div>
+    </div>
+
+    <div class="panel">
+      <div class="eyebrow">Public link</div>
+      <div class="link-block" style="margin-top: 0.75rem;">
+        <span id="publicLink"></span>
+        <button class="btn copy-btn" id="copyLinkBtn">Copy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/rooms-store.js"></script>
+<script>
+  const params = new URLSearchParams(location.search);
+  const roomId = params.get("id");
+
+  function apiBase() {
+    return (localStorage.getItem("waitly-room-admin-api-base") || "").replace(/\/$/, "");
+  }
+
+  if (!roomId) {
+    document.body.innerHTML = "<p style='padding:2rem; color: var(--error);'>No room id specified.</p>";
+    throw new Error("no room id");
+  }
+
+  let adminKey = null;
+  const stored = WaitlyRooms.find(roomId);
+  if (stored) adminKey = stored.adminKey;
+
+  const keyEntryView = document.getElementById("keyEntryView");
+  const dashboardView = document.getElementById("dashboardView");
+
+  function unlockWith(key) {
+    adminKey = key;
+    keyEntryView.hidden = true;
+    dashboardView.hidden = false;
+    startPolling();
+  }
+
+  if (adminKey) {
+    unlockWith(adminKey);
+  } else {
+    keyEntryView.hidden = false;
+    document.getElementById("unlockBtn").addEventListener("click", () => {
+      const key = document.getElementById("manualKey").value.trim();
+      if (!key) return;
+      unlockWith(key);
+    });
+  }
+
+  async function fetchStats() {
+    const resp = await fetch(`${apiBase()}/rooms/${roomId}`, {
+      headers: { "X-Admin-Key": adminKey },
+    });
+    if (resp.status === 401) throw new Error("unauthorized");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }
+
+  async function render() {
+    try {
+      const stats = await fetchStats();
+      document.getElementById("roomName").textContent = stats.name || roomId;
+      document.getElementById("roomIdLabel").textContent = roomId;
+      document.getElementById("waiting").textContent = stats.waiting;
+      document.getElementById("targetRate").textContent = stats.targetRate;
+      document.getElementById("admittedCount").textContent = stats.admittedCount;
+      document.getElementById("avgWait").textContent = stats.avgWaitSeconds === null ? "—" : `${stats.avgWaitSeconds}s`;
+
+      const rateInput = document.getElementById("newRate");
+      if (document.activeElement !== rateInput) rateInput.placeholder = stats.targetRate;
+    } catch (err) {
+      if (err.message === "unauthorized") {
+        keyEntryView.hidden = false;
+        dashboardView.hidden = true;
+        document.getElementById("keyError").textContent = "That admin key was rejected.";
+        adminKey = null;
+      }
+      console.error(err);
+    }
+  }
+
+  document.getElementById("setRateBtn").addEventListener("click", async () => {
+    const errEl = document.getElementById("rateError");
+    errEl.textContent = "";
+    const value = parseInt(document.getElementById("newRate").value, 10);
+    if (!value || value < 1) {
+      errEl.textContent = "Enter a rate of at least 1.";
+      return;
+    }
+    try {
+      const resp = await fetch(`${apiBase()}/rooms/${roomId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({ targetRate: value }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      document.getElementById("newRate").value = "";
+      await render();
+    } catch (err) {
+      errEl.textContent = err.message || String(err);
+    }
+  });
+
+  const joinUrl = `${location.origin}${location.pathname.replace("room.html", "join.html")}?room=${roomId}`;
+  document.getElementById("publicLink").textContent = joinUrl;
+  document.getElementById("copyLinkBtn").addEventListener("click", () => {
+    navigator.clipboard.writeText(joinUrl).then(() => {
+      const btn = document.getElementById("copyLinkBtn");
+      const original = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    });
+  });
+
+  let pollTimer;
+  function startPolling() {
+    render();
+    pollTimer = setInterval(render, 3000);
+  }
+</script>
+</body>
+</html>

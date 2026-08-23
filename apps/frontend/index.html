@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waitly — Rooms</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  body { padding: 2.5rem 1.5rem; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+  }
+
+  h1 { font-size: 1.3rem; margin: 0; font-weight: 700; }
+  .subtitle { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 2rem; }
+
+  .settings-panel { padding: 1.25rem 1.5rem; margin-bottom: 2rem; }
+  .settings-panel h2 { margin: 0 0 0.75rem; }
+  .row { display: flex; gap: 0.5rem; }
+
+  .rooms-grid {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .room-card {
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .room-card .name {
+    font-weight: 700;
+    font-size: 1.05rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .room-card .id {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+  }
+
+  .room-card .stats {
+    display: flex;
+    gap: 1.75rem;
+  }
+
+  .room-card .stat { text-align: center; }
+  .room-card .stat .value { font-size: 1.3rem; font-weight: 700; }
+  .room-card .stat .label {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.15rem;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 4rem 1.5rem;
+    color: var(--text-muted);
+  }
+
+  .empty-state p { margin-bottom: 1.5rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Waitly</h1>
+    <a class="btn btn-primary" href="create-room.html">+ New room</a>
+  </header>
+  <p class="subtitle">Your rooms, tracked in this browser. No login — the admin key from creation is what proves ownership.</p>
+
+  <div class="settings-panel panel">
+    <h2 class="eyebrow">Room Admin API endpoint</h2>
+    <div class="row">
+      <input type="text" class="input mono" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
+      <button class="btn" id="saveApiBase">Save</button>
+    </div>
+  </div>
+
+  <div class="rooms-grid" id="roomsGrid"></div>
+
+  <div class="empty-state panel" id="emptyState" hidden>
+    <p>No rooms yet in this browser.</p>
+    <a class="btn btn-primary" href="create-room.html">Create your first room</a>
+  </div>
+</div>
+
+<script src="assets/rooms-store.js"></script>
+<script>
+  const apiBaseInput = document.getElementById("apiBase");
+  apiBaseInput.value = localStorage.getItem("waitly-room-admin-api-base") || "";
+  document.getElementById("saveApiBase").addEventListener("click", () => {
+    localStorage.setItem("waitly-room-admin-api-base", apiBaseInput.value.trim());
+    render();
+  });
+
+  function apiBase() {
+    return (localStorage.getItem("waitly-room-admin-api-base") || "").replace(/\/$/, "");
+  }
+
+  async function fetchStats(room) {
+    const base = apiBase();
+    if (!base) return null;
+    try {
+      const resp = await fetch(`${base}/rooms/${room.roomId}`, {
+        headers: { "X-Admin-Key": room.adminKey },
+      });
+      if (!resp.ok) return null;
+      return resp.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function render() {
+    const rooms = WaitlyRooms.list();
+    const grid = document.getElementById("roomsGrid");
+    const empty = document.getElementById("emptyState");
+
+    if (rooms.length === 0) {
+      grid.innerHTML = "";
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+
+    grid.innerHTML = rooms.map((r) => `
+      <a class="room-card panel" href="room.html?id=${encodeURIComponent(r.roomId)}" style="text-decoration:none; color:inherit;">
+        <div>
+          <div class="name">${escapeHtml(r.name)}</div>
+          <div class="id mono">${escapeHtml(r.roomId)}</div>
+        </div>
+        <div class="stats" id="stats-${r.roomId}">
+          <div class="stat"><div class="value mono">…</div><div class="label">Loading</div></div>
+        </div>
+      </a>
+    `).join("");
+
+    for (const room of rooms) {
+      const stats = await fetchStats(room);
+      const el = document.getElementById(`stats-${room.roomId}`);
+      if (!el) continue;
+      if (!stats) {
+        el.innerHTML = `<div class="stat"><div class="value mono">&mdash;</div><div class="label">Unreachable</div></div>`;
+        continue;
+      }
+      el.innerHTML = `
+        <div class="stat"><div class="value mono">${stats.waiting}</div><div class="label">Waiting</div></div>
+        <div class="stat"><div class="value mono">${stats.targetRate}</div><div class="label">Rate</div></div>
+      `;
+    }
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  render();
+</script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waitly — New room</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  body { padding: 2.5rem 1.5rem; display: flex; justify-content: center; }
+  .wrap { max-width: 520px; width: 100%; }
+
+  .back { color: var(--text-muted); font-size: 0.85rem; text-decoration: none; display: inline-block; margin-bottom: 1.5rem; }
+  .back:hover { color: var(--accent); }
+
+  h1 { font-size: 1.3rem; margin: 0 0 1.75rem; font-weight: 700; }
+
+  .panel { padding: 1.75rem; }
+
+  label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+    margin-top: 1.1rem;
+  }
+  label:first-child { margin-top: 0; }
+
+  .hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.35rem; }
+
+  .submit-row { margin-top: 1.75rem; }
+  .submit-row .btn { width: 100%; padding: 0.8rem; }
+
+  .error-msg { color: var(--error); font-size: 0.85rem; margin-top: 1rem; }
+
+  /* --- Success state --- */
+  .success-panel { text-align: center; }
+  .success-icon {
+    width: 56px; height: 56px; margin: 0 auto 1rem;
+    border-radius: 50%; border: 2px solid var(--healthy);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--healthy); font-size: 1.6rem;
+  }
+
+  .field-block {
+    text-align: left;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-top: 1rem;
+  }
+  .field-block .label { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem; }
+  .field-block .value { font-family: var(--font-mono); font-size: 0.9rem; word-break: break-all; }
+
+  .warning {
+    background: rgba(224, 165, 44, 0.1);
+    border: 1px solid var(--slow);
+    color: var(--slow);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    margin-top: 1.25rem;
+    text-align: left;
+  }
+
+  .copy-btn { font-size: 0.72rem; padding: 0.25rem 0.6rem; margin-left: 0.5rem; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="index.html">&larr; Rooms</a>
+
+  <div id="formView">
+    <h1>Create a room</h1>
+    <div class="panel">
+      <div id="apiWarning" class="warning" hidden>Set the Room Admin API endpoint on the <a href="index.html">rooms page</a> first.</div>
+
+      <label for="name">Event name</label>
+      <input class="input" id="name" placeholder="Friday night concert">
+
+      <label for="protectedUrl">Protected URL</label>
+      <input class="input" id="protectedUrl" placeholder="https://tickets.example.com">
+      <div class="hint">Where admitted visitors get redirected, with their one-time token attached.</div>
+
+      <label for="targetRate">Starting target rate</label>
+      <input class="input mono" id="targetRate" type="number" min="1" value="5">
+      <div class="hint">Visitors admitted per Queue Controller tick. It adjusts automatically from here.</div>
+
+      <div class="submit-row">
+        <button class="btn btn-primary" id="submitBtn">Create room</button>
+      </div>
+      <div class="error-msg" id="formError"></div>
+    </div>
+  </div>
+
+  <div id="successView" hidden>
+    <h1>Room created</h1>
+    <div class="panel success-panel">
+      <div class="success-icon">&#10003;</div>
+      <div id="successName" style="font-weight:700; font-size:1.1rem;"></div>
+
+      <div class="field-block">
+        <div class="label">Public link — share with visitors</div>
+        <div class="value" id="publicLink">&mdash;</div>
+        <button class="btn copy-btn" data-copy="publicLink">Copy</button>
+      </div>
+
+      <div class="field-block">
+        <div class="label">Admin key</div>
+        <div class="value" id="adminKey"></div>
+        <button class="btn copy-btn" data-copy="adminKey">Copy</button>
+      </div>
+      <div class="warning">This key is shown once and never stored on the server — only its hash is kept. It's already saved in this browser, but if you clear site data or switch browsers, this is your only copy.</div>
+
+      <div class="submit-row">
+        <a class="btn btn-primary" id="dashboardLink" href="#" style="display:block; text-align:center; text-decoration:none;">Go to dashboard</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="assets/rooms-store.js"></script>
+<script>
+  function apiBase() {
+    return (localStorage.getItem("waitly-room-admin-api-base") || "").replace(/\/$/, "");
+  }
+
+  if (!apiBase()) {
+    document.getElementById("apiWarning").hidden = false;
+  }
+
+  document.getElementById("submitBtn").addEventListener("click", async () => {
+    const errEl = document.getElementById("formError");
+    errEl.textContent = "";
+
+    const base = apiBase();
+    if (!base) {
+      errEl.textContent = "Set the Room Admin API endpoint on the rooms page first.";
+      return;
+    }
+
+    const name = document.getElementById("name").value.trim();
+    const protectedUrl = document.getElementById("protectedUrl").value.trim();
+    const targetRate = parseInt(document.getElementById("targetRate").value, 10);
+
+    if (!name || !protectedUrl) {
+      errEl.textContent = "Name and protected URL are both required.";
+      return;
+    }
+
+    const btn = document.getElementById("submitBtn");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+
+    try {
+      const resp = await fetch(`${base}/rooms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, protectedUrl, targetRate }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || `Request failed (${resp.status})`);
+      }
+
+      WaitlyRooms.add({
+        roomId: data.roomId,
+        name,
+        adminKey: data.adminKey,
+        createdAt: new Date().toISOString(),
+      });
+
+      const joinUrl = `${location.origin}${location.pathname.replace("create-room.html", "join.html")}?room=${data.roomId}`;
+
+      document.getElementById("successName").textContent = name;
+      document.getElementById("publicLink").textContent = joinUrl;
+      document.getElementById("adminKey").textContent = data.adminKey;
+      document.getElementById("dashboardLink").href = `room.html?id=${data.roomId}`;
+
+      document.getElementById("formView").hidden = true;
+      document.getElementById("successView").hidden = false;
+    } catch (err) {
+      errEl.textContent = err.message || String(err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Create room";
+    }
+  });
+
+  document.querySelectorAll(".copy-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const text = document.getElementById(btn.dataset.copy).textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const original = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = original; }, 1200);
+      });
+    });
+  });
+</script>
+</body>
+</html>
