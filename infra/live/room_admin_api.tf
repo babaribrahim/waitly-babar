@@ -134,6 +134,7 @@ locals {
     "PATCH /rooms/{roomId}",
     "GET /demo/status",
     "POST /demo/mode",
+    "POST /demo/reset",
   ]
 }
 

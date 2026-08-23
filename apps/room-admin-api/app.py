@@ -11,6 +11,7 @@ Routes (dispatched on API Gateway's routeKey, payload format 2.0):
   PATCH /rooms/{roomId}   update targetRate, requires X-Admin-Key
   GET   /demo/status      demo-control page only, see below
   POST  /demo/mode        demo-control page only, see below
+  POST  /demo/reset       demo-control page only, see below
 
 Auth is a simple admin-key-hash check per room (CLAUDE.md is explicit this
 is proportionate to project scope, not a full auth system) - only the
@@ -210,6 +211,15 @@ def update_room(event):
     return _response(200, {"roomId": room_id, "targetRate": new_rate})
 
 
+def _most_recent_room():
+    # Tracks whichever room was created most recently, not a fixed id -
+    # so demo-control automatically follows whatever room a presenter
+    # just created live, with nothing to keep in sync by hand.
+    resp = table.scan(FilterExpression="SK = :meta", ExpressionAttributeValues={":meta": "META"})
+    items = resp.get("Items", [])
+    return max(items, key=lambda r: r.get("createdAt", ""), default=None)
+
+
 def demo_status(event):
     # Deliberately unauthenticated demo-only endpoint - see module docstring.
     mode = "unknown"
@@ -221,12 +231,7 @@ def demo_status(event):
     except ClientError as exc:
         print(f"failed to read mode: {exc}")
 
-    # Tracks whichever room was created most recently, not a fixed id -
-    # so this page automatically follows whatever room a presenter just
-    # created live, with nothing to keep in sync by hand.
-    resp = table.scan(FilterExpression="SK = :meta", ExpressionAttributeValues={":meta": "META"})
-    items = resp.get("Items", [])
-    room = max(items, key=lambda r: r.get("createdAt", ""), default=None)
+    room = _most_recent_room()
 
     room_stats = None
     if room:
@@ -254,6 +259,25 @@ def demo_set_mode(event):
     return _response(200, {"mode": mode})
 
 
+def demo_reset_room(event):
+    # Deliberately unauthenticated demo-only endpoint - see module docstring.
+    # Resets nextNumber/admittedCount to 0 on whichever room demo-status is
+    # currently tracking - the "Reset room" button on demo-control.
+    # targetRate is left alone: the Queue Controller owns that value and
+    # will keep adjusting it regardless (see scripts/reset_demo_room.py,
+    # the CLI equivalent, for the same reasoning spelled out in full).
+    room = _most_recent_room()
+    if not room:
+        return _response(404, {"error": "no room to reset"})
+
+    table.update_item(
+        Key={"PK": room["PK"], "SK": "META"},
+        UpdateExpression="SET nextNumber = :z, admittedCount = :z",
+        ExpressionAttributeValues={":z": 0},
+    )
+    return _response(200, {"roomId": room["PK"].split("#", 1)[1], "reset": True})
+
+
 ROUTES = {
     "POST /rooms": create_room,
     "GET /rooms": list_rooms,
@@ -261,6 +285,7 @@ ROUTES = {
     "PATCH /rooms/{roomId}": update_room,
     "GET /demo/status": demo_status,
     "POST /demo/mode": demo_set_mode,
+    "POST /demo/reset": demo_reset_room,
 }
 
 

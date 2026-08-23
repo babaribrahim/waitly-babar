@@ -129,12 +129,33 @@ def advance_room(room, healthy: bool) -> int:
     else:
         new_rate = max(current_rate // 2, MIN_RATE)
 
-    # One atomic UpdateItem: sets the new rate and advances admittedCount
-    # by that same amount in a single call, not a per-visitor write.
+    # admittedCount must never exceed nextNumber - you can't admit more
+    # people than have actually joined. An earlier version ADDed the rate
+    # unconditionally every tick, which kept advancing admittedCount even
+    # with an empty queue; once it ran far enough ahead, any later burst
+    # of real visitors landed under that inflated number and got admitted
+    # instantly, with zero throttling - exactly what this system exists
+    # to prevent. Capping here is what makes an empty queue actually mean
+    # "protected", not just "temporarily caught up".
+    #
+    # This computes the cap from the room snapshot scan_rooms() already
+    # read this tick rather than a fresh read-modify-write, so it's not a
+    # single atomic ADD the way CLAUDE.md's DynamoDB section describes -
+    # deliberately: nothing else ever writes admittedCount (the Admission
+    # API only reads it), and the Queue Controller itself runs as exactly
+    # one instance (see the desired_count=1 rationale in queue_controller.tf),
+    # so there is no concurrent writer for this field to race against.
+    # nextNumber can move between this scan and the write below (a real
+    # visitor joining concurrently), which just makes this tick's cap
+    # slightly conservative - self-corrects on the next tick 5s later.
+    next_number = int(room.get("nextNumber", 0))
+    current_admitted = int(room.get("admittedCount", 0))
+    new_admitted = min(current_admitted + new_rate, next_number)
+
     table.update_item(
         Key={"PK": room["PK"], "SK": "META"},
-        UpdateExpression="SET targetRate = :rate ADD admittedCount :rate",
-        ExpressionAttributeValues={":rate": new_rate},
+        UpdateExpression="SET targetRate = :rate, admittedCount = :admitted",
+        ExpressionAttributeValues={":rate": new_rate, ":admitted": new_admitted},
     )
     return new_rate
 

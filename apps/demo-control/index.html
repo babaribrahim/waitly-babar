@@ -9,8 +9,8 @@
   api_endpoint) into the field below once; it's saved in this browser's
   localStorage so you don't have to re-enter it next time.
 
-  Talks only to two deliberately unauthenticated demo routes on the Room
-  Admin API (GET /demo/status, POST /demo/mode) - see app.py and
+  Talks only to three deliberately unauthenticated demo routes on the Room
+  Admin API (GET /demo/status, POST /demo/mode, POST /demo/reset) - see app.py and
   room_admin_api.tf for why that's fine at this project's scope. The
   browser never touches DynamoDB directly; the Lambda holds that
   permission and the mode lives as one item in the shared table.
@@ -142,6 +142,20 @@
     min-height: 1em;
   }
 
+  .reset-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .reset-hint {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+
   .footer {
     color: var(--text-dim);
     font-size: 0.78rem;
@@ -196,6 +210,11 @@
       <div class="stat"><div class="value mono" id="admittedCount">-</div><div class="label">Admitted</div></div>
       <div class="stat"><div class="value mono" id="lastUpdated">-</div><div class="label">Last updated</div></div>
     </div>
+    <div class="reset-row">
+      <button class="btn" id="resetRoomBtn">Reset room</button>
+      <span class="reset-hint">Zeroes waiting/admitted right before you demo a fresh join. Rate is left alone — the Queue Controller owns that.</span>
+    </div>
+    <div class="error-msg" id="resetError"></div>
   </div>
 
   <p class="footer">Polling every 2s. Run <code>python scripts/probe_protected_site.py --rate 3</code> to generate the traffic these metrics depend on.</p>
@@ -275,6 +294,30 @@
         btn.disabled = false;
       }
     });
+  });
+
+  document.getElementById("resetRoomBtn").addEventListener("click", async () => {
+    const base = apiBase();
+    const errEl = document.getElementById("resetError");
+    errEl.textContent = "";
+    if (!base) {
+      errEl.textContent = "Set the API endpoint above first.";
+      return;
+    }
+    const btn = document.getElementById("resetRoomBtn");
+    btn.disabled = true;
+    try {
+      const resp = await fetch(`${base}/demo/reset`, { method: "POST" });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        errEl.textContent = body.error || `Request failed (${resp.status})`;
+      }
+      await refresh();
+    } catch (err) {
+      errEl.textContent = String(err);
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   refresh();
