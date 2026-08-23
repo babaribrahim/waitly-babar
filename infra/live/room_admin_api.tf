@@ -65,7 +65,6 @@ resource "aws_lambda_function" "room_admin_api" {
     variables = {
       TABLE_NAME            = aws_dynamodb_table.main.name
       POLL_INTERVAL_SECONDS = "5"
-      DEMO_ROOM_ID          = "demo"
       # FRONTEND_BASE_URL deliberately unset until the frontend phase
       # exists - publicLink comes back null until then, no code change
       # needed later, just set this variable.

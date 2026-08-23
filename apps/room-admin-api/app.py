@@ -20,8 +20,8 @@ creation time, and never persisted.
 The /demo/* routes exist only for apps/demo-control/index.html, a
 standalone page (not part of the real product UI) that lets a demo
 operator toggle the protected-site fixture's mode and watch the
-DEMO_ROOM_ID room's targetRate react, without typing AWS CLI commands
-live. The mode itself lives as one item in this same DynamoDB table
+most-recently-created room's targetRate react, without typing AWS CLI
+commands live. The mode itself lives as one item in this same DynamoDB table
 (PK=CONFIG#protected-site, SK=MODE) - this Lambda already has table-wide
 read/write permission, so no separate permission was needed for it.
 Deliberately unauthenticated, same "proportionate to scope" reasoning as
@@ -50,8 +50,6 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
 # to be a meaningful estimate - both default to 5s.
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "5"))
 
-# Demo-control page only (see module docstring).
-DEMO_ROOM_ID = os.environ.get("DEMO_ROOM_ID", "demo")
 VALID_MODES = {"healthy", "slow", "error"}
 MODE_KEY = {"PK": "CONFIG#protected-site", "SK": "MODE"}
 
@@ -223,13 +221,20 @@ def demo_status(event):
     except ClientError as exc:
         print(f"failed to read mode: {exc}")
 
-    room = _get_room(DEMO_ROOM_ID)
+    # Tracks whichever room was created most recently, not a fixed id -
+    # so this page automatically follows whatever room a presenter just
+    # created live, with nothing to keep in sync by hand.
+    resp = table.scan(FilterExpression="SK = :meta", ExpressionAttributeValues={":meta": "META"})
+    items = resp.get("Items", [])
+    room = max(items, key=lambda r: r.get("createdAt", ""), default=None)
+
     room_stats = None
     if room:
         next_number = int(room.get("nextNumber", 0))
         admitted_count = int(room.get("admittedCount", 0))
         room_stats = {
-            "roomId": DEMO_ROOM_ID,
+            "roomId": room["PK"].split("#", 1)[1],
+            "name": room.get("name"),
             "targetRate": int(room.get("targetRate", 0)),
             "admittedCount": admitted_count,
             "waiting": max(next_number - admitted_count, 0),
