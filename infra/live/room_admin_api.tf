@@ -32,22 +32,10 @@ resource "aws_iam_role_policy" "room_admin_api_dynamodb" {
   })
 }
 
-# For the /demo/mode route (apps/demo-control/index.html): the browser
-# never gets ssm:PutParameter itself, it calls this Lambda instead, which
-# has it scoped to exactly this one parameter.
-resource "aws_iam_role_policy" "room_admin_api_ssm" {
-  name = "${var.project}-room-admin-api-ssm"
-  role = aws_iam_role.room_admin_api.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["ssm:GetParameter", "ssm:PutParameter"]
-      Resource = aws_ssm_parameter.protected_site_mode.arn
-    }]
-  })
-}
+# No separate SSM/demo-mode IAM policy needed: the /demo/mode route
+# (apps/demo-control/index.html) writes to the same DynamoDB table via
+# room_admin_api_dynamodb above (PK=CONFIG#protected-site, SK=MODE) -
+# see protected_site.tf for why this lives in DynamoDB, not SSM.
 
 data "archive_file" "room_admin_api" {
   type        = "zip"
@@ -77,7 +65,6 @@ resource "aws_lambda_function" "room_admin_api" {
     variables = {
       TABLE_NAME            = aws_dynamodb_table.main.name
       POLL_INTERVAL_SECONDS = "5"
-      MODE_PARAMETER_NAME   = aws_ssm_parameter.protected_site_mode.name
       DEMO_ROOM_ID          = "demo"
       # FRONTEND_BASE_URL deliberately unset until the frontend phase
       # exists - publicLink comes back null until then, no code change

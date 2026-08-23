@@ -23,6 +23,7 @@ import time
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from fastapi import FastAPI, HTTPException
 
@@ -32,7 +33,12 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
 VISITOR_TTL_SECONDS = 6 * 60 * 60  # ~6h, matches CLAUDE.md
 TOKEN_TTL_SECONDS = 5 * 60  # ~5min, matches CLAUDE.md
 
-dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+# Explicit, short timeout so a network gap (e.g. a missing VPC endpoint)
+# fails fast and loud instead of hanging a request indefinitely - see
+# apps/queue-controller/app.py's docstring for why this was added.
+BOTO_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
+
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION, config=BOTO_CONFIG)
 table = dynamodb.Table(TABLE_NAME)
 
 app = FastAPI(title="Waitly Admission API")

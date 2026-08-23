@@ -21,10 +21,11 @@ The /demo/* routes exist only for apps/demo-control/index.html, a
 standalone page (not part of the real product UI) that lets a demo
 operator toggle the protected-site fixture's mode and watch the
 DEMO_ROOM_ID room's targetRate react, without typing AWS CLI commands
-live. This is how the browser reaches SSM safely: it never gets
-ssm:PutParameter itself, it calls this Lambda, which already has that
-permission scoped to one parameter. Deliberately unauthenticated, same
-"proportionate to scope" reasoning as GET /rooms.
+live. The mode itself lives as one item in this same DynamoDB table
+(PK=CONFIG#protected-site, SK=MODE) - this Lambda already has table-wide
+read/write permission, so no separate permission was needed for it.
+Deliberately unauthenticated, same "proportionate to scope" reasoning as
+GET /rooms.
 """
 
 import hashlib
@@ -35,6 +36,7 @@ import secrets
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 TABLE_NAME = os.environ["TABLE_NAME"]
@@ -48,15 +50,20 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
 # to be a meaningful estimate - both default to 5s.
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "5"))
 
-# Demo-control page only (see module docstring). Both unset in any
-# environment that doesn't wire up the protected-site fixture.
-MODE_PARAMETER_NAME = os.environ.get("MODE_PARAMETER_NAME", "")
+# Demo-control page only (see module docstring).
 DEMO_ROOM_ID = os.environ.get("DEMO_ROOM_ID", "demo")
 VALID_MODES = {"healthy", "slow", "error"}
+MODE_KEY = {"PK": "CONFIG#protected-site", "SK": "MODE"}
 
-dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+# Explicit, short timeout so a network gap fails fast and loud instead of
+# hanging silently - see apps/queue-controller/app.py's docstring for why.
+# Lambda's own function timeout (10s) would eventually kill a hung
+# invocation anyway, but this makes the failure a clear, logged
+# exception rather than an opaque platform-level timeout.
+BOTO_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1})
+
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION, config=BOTO_CONFIG)
 table = dynamodb.Table(TABLE_NAME)
-ssm = boto3.client("ssm", region_name=AWS_REGION)
 
 
 def _response(status, body):
@@ -208,12 +215,13 @@ def update_room(event):
 def demo_status(event):
     # Deliberately unauthenticated demo-only endpoint - see module docstring.
     mode = "unknown"
-    if MODE_PARAMETER_NAME:
-        try:
-            resp = ssm.get_parameter(Name=MODE_PARAMETER_NAME)
-            mode = resp["Parameter"]["Value"]
-        except ClientError as exc:
-            print(f"failed to read mode parameter: {exc}")
+    try:
+        resp = table.get_item(Key=MODE_KEY)
+        item = resp.get("Item")
+        if item and "mode" in item:
+            mode = item["mode"]
+    except ClientError as exc:
+        print(f"failed to read mode: {exc}")
 
     room = _get_room(DEMO_ROOM_ID)
     room_stats = None
@@ -232,15 +240,12 @@ def demo_status(event):
 
 def demo_set_mode(event):
     # Deliberately unauthenticated demo-only endpoint - see module docstring.
-    if not MODE_PARAMETER_NAME:
-        return _response(500, {"error": "MODE_PARAMETER_NAME not configured"})
-
     body = json.loads(event.get("body") or "{}")
     mode = body.get("mode")
     if mode not in VALID_MODES:
         return _response(400, {"error": f"mode must be one of {sorted(VALID_MODES)}"})
 
-    ssm.put_parameter(Name=MODE_PARAMETER_NAME, Value=mode, Overwrite=True)
+    table.put_item(Item={**MODE_KEY, "mode": mode})
     return _response(200, {"mode": mode})
 
 

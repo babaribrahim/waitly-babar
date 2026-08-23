@@ -22,12 +22,36 @@ resource "aws_vpc_endpoint" "dynamodb" {
 }
 
 # Interface endpoints — the minimum set for Fargate tasks in a NAT-less
-# private subnet to pull images from ECR and ship logs to CloudWatch. Both
+# private subnet to reach the AWS APIs the app code actually calls. Full
+# audit of every service's boto3 calls (2026-08-23), cross-checked
+# against what's provisioned here:
+#   - Admission API, protected-site fixture: DynamoDB only -> free gateway
+#     endpoint below, no interface endpoint needed.
+#   - Queue Controller: DynamoDB (gateway, covered) + CloudWatch Metrics
+#     (cloudwatch.get_metric_data) -> needs "monitoring" below. This one
+#     was missing and caused a real bug: the call had no route out and
+#     hung the whole AIMD loop indefinitely, with nothing logged (fixed
+#     alongside this by adding explicit boto3 timeouts in every service's
+#     app code, so the *next* missing endpoint fails loud instead of
+#     silent).
+#   - Room Admin API and both CodeDeploy validation Lambdas: not
+#     VPC-attached at all (deliberately, see CLAUDE.md's Lambda
+#     rationale), so they reach every AWS API directly over the internet
+#     regardless of what's provisioned here.
 # ecr.api and ecr.dkr are required together (auth + the actual registry
-# API) — dropping either breaks image pulls. "logs" is required because the
-# task definitions use the awslogs driver with no NAT fallback.
+# API) — dropping either breaks image pulls. "logs" is required because
+# the task definitions use the awslogs driver with no NAT fallback.
+#
+# Deliberately no "ssm" endpoint: an earlier version of the protected-site
+# fixture used SSM Parameter Store for its mode toggle, which would have
+# needed one (~$7.30/mo) since Fargate tasks here have no NAT. Switched to
+# storing the mode as a DynamoDB item instead — reuses the free gateway
+# endpoint already below, so no new interface endpoint was needed at all.
+# CloudWatch Metrics has no such free alternative — ALB publishes those
+# metrics itself, there's nowhere else to read them from — so "monitoring"
+# below is a genuinely unavoidable cost, not a choice.
 locals {
-  interface_endpoint_services = ["ecr.api", "ecr.dkr", "logs"]
+  interface_endpoint_services = ["ecr.api", "ecr.dkr", "logs", "monitoring"]
 }
 
 # Deliberately single-AZ (one ENI per service, not one per AZ): AWS bills

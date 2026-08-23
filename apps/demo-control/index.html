@@ -12,7 +12,8 @@
   Talks only to two deliberately unauthenticated demo routes on the Room
   Admin API (GET /demo/status, POST /demo/mode) - see app.py and
   room_admin_api.tf for why that's fine at this project's scope. The
-  browser never gets direct SSM access; the Lambda holds that permission.
+  browser never touches DynamoDB directly; the Lambda holds that
+  permission and the mode lives as one item in the shared table.
 -->
 <html lang="en">
 <head>

@@ -5,21 +5,30 @@
 # no CodeDeploy/blue-green/canary - that mechanism was already proven
 # properly three times over; this is a demo prop, not a fourth example.
 
-resource "aws_ssm_parameter" "protected_site_mode" {
-  name        = "/${var.project}/protected-site/mode"
-  description = "Toggles the protected-site fixture's behavior at runtime, no redeploy needed. One of: healthy, slow, error."
-  type        = "String" # not sensitive - a demo toggle, SecureString isn't warranted
-  value       = "healthy"
+# Mode toggle lives as one item in the existing DynamoDB table, not SSM
+# Parameter Store: the fixture's task runs in a private, NAT-less subnet,
+# and DynamoDB already has a free gateway endpoint reachable from there
+# (see vpc_endpoints.tf) - SSM would have needed a new, paid interface
+# endpoint (~$7.30/mo) purely to read one small string, found the hard
+# way when app.py's SSM calls had no route out and hung every request.
+resource "aws_dynamodb_table_item" "protected_site_mode" {
+  table_name = aws_dynamodb_table.main.name
+  hash_key   = aws_dynamodb_table.main.hash_key
+  range_key  = aws_dynamodb_table.main.range_key
 
-  # The fixture's own toggle script (scripts/toggle_protected_site.py) is
-  # the operational way to change this during a demo - Terraform owning
-  # the value would just mean every toggle also has to fight the next
-  # `terraform apply` reverting it back to "healthy".
+  item = jsonencode({
+    PK   = { S = "CONFIG#protected-site" }
+    SK   = { S = "MODE" }
+    mode = { S = "healthy" }
+  })
+
+  # Toggling happens through the Room Admin API's POST /demo/mode (see
+  # scripts/toggle_protected_site.py and apps/demo-control/index.html),
+  # not Terraform - ignore_changes stops the next `terraform apply` from
+  # fighting a live toggle and reverting it back to "healthy".
   lifecycle {
-    ignore_changes = [value]
+    ignore_changes = [item]
   }
-
-  tags = { Name = "${var.project}-protected-site-mode" }
 }
 
 resource "aws_lb_target_group" "protected_site" {
@@ -93,16 +102,16 @@ resource "aws_iam_role" "protected_site_task" {
   tags = { Name = "${var.project}-protected-site-task-role" }
 }
 
-resource "aws_iam_role_policy" "protected_site_ssm" {
-  name = "${var.project}-protected-site-ssm"
+resource "aws_iam_role_policy" "protected_site_dynamodb" {
+  name = "${var.project}-protected-site-dynamodb"
   role = aws_iam_role.protected_site_task.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["ssm:GetParameter"]
-      Resource = aws_ssm_parameter.protected_site_mode.arn
+      Action   = ["dynamodb:GetItem"]
+      Resource = aws_dynamodb_table.main.arn
     }]
   })
 }
@@ -125,7 +134,8 @@ resource "aws_ecs_task_definition" "protected_site" {
       protocol      = "tcp"
     }]
     environment = [
-      { name = "MODE_PARAMETER_NAME", value = aws_ssm_parameter.protected_site_mode.name },
+      { name = "TABLE_NAME", value = aws_dynamodb_table.main.name },
+      { name = "AWS_REGION", value = var.region },
       { name = "SLOW_DELAY_SECONDS", value = "3" },
     ]
     logConfiguration = {

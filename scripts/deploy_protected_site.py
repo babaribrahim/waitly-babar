@@ -56,7 +56,7 @@ def main():
     log_group = outputs["protected_site_log_group_name"]
     cluster = outputs["ecs_cluster_name"]
     service = outputs["protected_site_service_name"]
-    mode_parameter_name = outputs["protected_site_mode_parameter"]
+    table_name = outputs["dynamodb_table_name"]
 
     app_dir = REPO_ROOT / "apps" / CONTAINER_NAME
     image_uri = f"{ecr_url}:{args.version}"
@@ -84,7 +84,8 @@ def main():
         "essential": True,
         "portMappings": [{"containerPort": CONTAINER_PORT, "protocol": "tcp"}],
         "environment": [
-            {"name": "MODE_PARAMETER_NAME", "value": mode_parameter_name},
+            {"name": "TABLE_NAME", "value": table_name},
+            {"name": "AWS_REGION", "value": region},
             {"name": "SLOW_DELAY_SECONDS", "value": "3"},
         ],
         "logConfiguration": {

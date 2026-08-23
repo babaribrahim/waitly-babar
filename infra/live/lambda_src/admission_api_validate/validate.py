@@ -15,8 +15,11 @@ import os
 import urllib.request
 
 import boto3
+from botocore.config import Config
 
-codedeploy = boto3.client("codedeploy")
+# Explicit, short timeout so a network gap fails fast and loud instead of
+# hanging silently - see apps/queue-controller/app.py's docstring for why.
+codedeploy = boto3.client("codedeploy", config=Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 1}))
 
 
 def handler(event, context):

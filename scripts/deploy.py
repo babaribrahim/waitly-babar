@@ -116,6 +116,11 @@ def main():
     environment = [{"name": "AWS_REGION", "value": region}]
     if table_name:
         environment.append({"name": "TABLE_NAME", "value": table_name})
+    # Any service-specific vars beyond the generic ones above (e.g. the
+    # Queue Controller's PROTECTED_SITE_* ARN suffixes) - see the
+    # extra_env comment in outputs.tf for why this exists.
+    for key, value in svc.get("extra_env", {}).items():
+        environment.append({"name": key, "value": value})
 
     container_def = [{
         "name": container_name,

@@ -17,6 +17,14 @@ PROTECTED_SITE_LB_ARN_SUFFIX / PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX are
 optional and unset until the protected-site fixture exists (a later
 phase - see CLAUDE.md's build order). Until then the loop assumes healthy
 and logs that it has no real target configured.
+
+Every boto3 client/resource below gets an explicit, short timeout
+(BOTO_CONFIG). Found the hard way: without one, a network call with no
+route out (e.g. a missing VPC endpoint) can hang the whole loop
+indefinitely with nothing logged at all - not even an exception - which
+is a worse failure mode than an explicit, visible error. A short timeout
+turns "silently stuck forever" into "logs a clear failure every
+POLL_INTERVAL_SECONDS".
 """
 
 import logging
@@ -25,6 +33,7 @@ import threading
 import time
 
 import boto3
+from botocore.config import Config
 from fastapi import FastAPI
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,9 +51,11 @@ ERROR_COUNT_THRESHOLD = int(os.environ.get("ERROR_COUNT_THRESHOLD", "5"))
 PROTECTED_SITE_LB_ARN_SUFFIX = os.environ.get("PROTECTED_SITE_LB_ARN_SUFFIX", "")
 PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX = os.environ.get("PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX", "")
 
-dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+BOTO_CONFIG = Config(connect_timeout=5, read_timeout=10, retries={"max_attempts": 2})
+
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION, config=BOTO_CONFIG)
 table = dynamodb.Table(TABLE_NAME)
-cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
+cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION, config=BOTO_CONFIG)
 
 app = FastAPI(title="Waitly Queue Controller")
 
