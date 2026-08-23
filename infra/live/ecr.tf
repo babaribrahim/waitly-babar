@@ -1,0 +1,57 @@
+# hello-world's ECR repo is deliberately left in place, untouched — see
+# infra/reference/hello-world-blue-green/. Its two images (v1, v2) are the
+# exact artifacts behind the proven blue/green deployments documented
+# there; negligible storage cost to keep as provenance.
+resource "aws_ecr_repository" "hello_world" {
+  name                 = "${var.project}/hello-world"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = { Name = "${var.project}-ecr-hello-world" }
+}
+
+resource "aws_ecr_lifecycle_policy" "hello_world" {
+  repository = aws_ecr_repository.hello_world.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep only the 10 most recently pushed images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
+
+resource "aws_ecr_repository" "admission_api" {
+  name                 = "${var.project}/admission-api"
+  image_tag_mutability = "MUTABLE" # deploy.py reuses version tags across deployments
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = { Name = "${var.project}-ecr-admission-api" }
+}
+
+resource "aws_ecr_lifecycle_policy" "admission_api" {
+  repository = aws_ecr_repository.admission_api.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep only the 10 most recently pushed images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
+}
