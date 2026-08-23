@@ -61,6 +61,36 @@ output "queue_controller" {
   }
 }
 
+# Protected-site fixture: not deployed via scripts/deploy.py (plain ECS
+# rolling deploy, not CodeDeploy) - see scripts/deploy_protected_site.py.
+output "protected_site_ecr_repository_url" {
+  value = aws_ecr_repository.protected_site.repository_url
+}
+
+output "protected_site_task_definition_family" {
+  value = aws_ecs_task_definition.protected_site.family
+}
+
+output "protected_site_task_role_arn" {
+  value = aws_iam_role.protected_site_task.arn
+}
+
+output "protected_site_log_group_name" {
+  value = aws_cloudwatch_log_group.protected_site.name
+}
+
+output "protected_site_service_name" {
+  value = aws_ecs_service.protected_site.name
+}
+
+output "protected_site_mode_parameter" {
+  value = aws_ssm_parameter.protected_site_mode.name
+}
+
+output "protected_site_url" {
+  value = "http://${aws_lb.hello_world.dns_name}:8100/"
+}
+
 # Lambda services use a different shape (no ECR/ECS fields) - read by
 # scripts/deploy_lambda.py instead of scripts/deploy.py.
 output "room_admin_api" {

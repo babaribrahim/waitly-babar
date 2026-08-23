@@ -168,12 +168,13 @@ resource "aws_ecs_task_definition" "queue_controller" {
     environment = [
       { name = "TABLE_NAME", value = aws_dynamodb_table.main.name },
       { name = "AWS_REGION", value = var.region },
-      # PROTECTED_SITE_LB_ARN_SUFFIX / PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX
-      # are deliberately unset until the protected-site fixture exists (a
-      # later phase per CLAUDE.md's build order) — app.py treats "no
-      # target configured" as healthy and logs that it's running without
-      # one. Set both via a task-def update once the fixture is live, no
-      # code change needed.
+      # Wired to the real protected-site fixture now that it exists.
+      # This is only what the FIRST task-def revision gets, same as
+      # everything else here — CodeDeploy owns the running service after
+      # that. A real `deploy.py queue-controller vN` run is what actually
+      # rolls a new revision (with these values) out to the live service.
+      { name = "PROTECTED_SITE_LB_ARN_SUFFIX", value = aws_lb.hello_world.arn_suffix },
+      { name = "PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX", value = aws_lb_target_group.protected_site.arn_suffix },
     ]
     logConfiguration = {
       logDriver = "awslogs"

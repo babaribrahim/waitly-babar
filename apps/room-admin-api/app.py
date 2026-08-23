@@ -9,11 +9,22 @@ Routes (dispatched on API Gateway's routeKey, payload format 2.0):
   GET   /rooms            list all rooms (name/id only, no auth)
   GET   /rooms/{roomId}   live stats, requires X-Admin-Key
   PATCH /rooms/{roomId}   update targetRate, requires X-Admin-Key
+  GET   /demo/status      demo-control page only, see below
+  POST  /demo/mode        demo-control page only, see below
 
 Auth is a simple admin-key-hash check per room (CLAUDE.md is explicit this
 is proportionate to project scope, not a full auth system) - only the
 SHA-256 hash is ever stored; the raw key is returned exactly once, at
 creation time, and never persisted.
+
+The /demo/* routes exist only for apps/demo-control/index.html, a
+standalone page (not part of the real product UI) that lets a demo
+operator toggle the protected-site fixture's mode and watch the
+DEMO_ROOM_ID room's targetRate react, without typing AWS CLI commands
+live. This is how the browser reaches SSM safely: it never gets
+ssm:PutParameter itself, it calls this Lambda, which already has that
+permission scoped to one parameter. Deliberately unauthenticated, same
+"proportionate to scope" reasoning as GET /rooms.
 """
 
 import hashlib
@@ -37,8 +48,15 @@ FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
 # to be a meaningful estimate - both default to 5s.
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "5"))
 
+# Demo-control page only (see module docstring). Both unset in any
+# environment that doesn't wire up the protected-site fixture.
+MODE_PARAMETER_NAME = os.environ.get("MODE_PARAMETER_NAME", "")
+DEMO_ROOM_ID = os.environ.get("DEMO_ROOM_ID", "demo")
+VALID_MODES = {"healthy", "slow", "error"}
+
 dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
 table = dynamodb.Table(TABLE_NAME)
+ssm = boto3.client("ssm", region_name=AWS_REGION)
 
 
 def _response(status, body):
@@ -187,11 +205,52 @@ def update_room(event):
     return _response(200, {"roomId": room_id, "targetRate": new_rate})
 
 
+def demo_status(event):
+    # Deliberately unauthenticated demo-only endpoint - see module docstring.
+    mode = "unknown"
+    if MODE_PARAMETER_NAME:
+        try:
+            resp = ssm.get_parameter(Name=MODE_PARAMETER_NAME)
+            mode = resp["Parameter"]["Value"]
+        except ClientError as exc:
+            print(f"failed to read mode parameter: {exc}")
+
+    room = _get_room(DEMO_ROOM_ID)
+    room_stats = None
+    if room:
+        next_number = int(room.get("nextNumber", 0))
+        admitted_count = int(room.get("admittedCount", 0))
+        room_stats = {
+            "roomId": DEMO_ROOM_ID,
+            "targetRate": int(room.get("targetRate", 0)),
+            "admittedCount": admitted_count,
+            "waiting": max(next_number - admitted_count, 0),
+        }
+
+    return _response(200, {"mode": mode, "room": room_stats})
+
+
+def demo_set_mode(event):
+    # Deliberately unauthenticated demo-only endpoint - see module docstring.
+    if not MODE_PARAMETER_NAME:
+        return _response(500, {"error": "MODE_PARAMETER_NAME not configured"})
+
+    body = json.loads(event.get("body") or "{}")
+    mode = body.get("mode")
+    if mode not in VALID_MODES:
+        return _response(400, {"error": f"mode must be one of {sorted(VALID_MODES)}"})
+
+    ssm.put_parameter(Name=MODE_PARAMETER_NAME, Value=mode, Overwrite=True)
+    return _response(200, {"mode": mode})
+
+
 ROUTES = {
     "POST /rooms": create_room,
     "GET /rooms": list_rooms,
     "GET /rooms/{roomId}": get_room_stats,
     "PATCH /rooms/{roomId}": update_room,
+    "GET /demo/status": demo_status,
+    "POST /demo/mode": demo_set_mode,
 }
 
 

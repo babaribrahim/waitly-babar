@@ -59,6 +59,20 @@ resource "aws_security_group" "alb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Protected-site fixture (:8100): open to 0.0.0.0/0 for a different
+  # reason than the test listeners above -- this one is meant to be hit,
+  # by scripts/probe_protected_site.py, standing in for real admitted
+  # visitors until the frontend exists. The prober can run from anywhere
+  # (a laptop during a demo), so there's no fixed CIDR to scope this to
+  # either. It's a demo prop with no real data behind it either way.
+  ingress {
+    description = "Protected-site fixture (demo prop, driven by scripts/probe_protected_site.py)"
+    from_port   = 8100
+    to_port     = 8100
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

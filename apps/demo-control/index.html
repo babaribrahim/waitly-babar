@@ -1,0 +1,201 @@
+<!doctype html>
+<!--
+  Demo-control page. NOT part of the real product UI, not linked from the
+  organizer dashboard. Open this file directly in a browser (file://) or
+  serve it however's convenient - it has no build step and no dependency
+  on the real frontend existing.
+
+  Paste the Room Admin API's endpoint (terraform output room_admin_api ->
+  api_endpoint) into the field below once; it's saved in this browser's
+  localStorage so you don't have to re-enter it next time.
+
+  Talks only to two deliberately unauthenticated demo routes on the Room
+  Admin API (GET /demo/status, POST /demo/mode) - see app.py and
+  room_admin_api.tf for why that's fine at this project's scope. The
+  browser never gets direct SSM access; the Lambda holds that permission.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Waitly demo control</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2e38;
+    --text: #e8eaed;
+    --muted: #8b90a0;
+    --healthy: #2fbf71;
+    --slow: #e0a52c;
+    --error: #e05252;
+    --accent: #5b8def;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 2rem;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.5rem; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .panel h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.75rem; }
+  .row { display: flex; gap: 0.5rem; align-items: center; }
+  input[type=text] {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.5rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 0.5rem 0.9rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .mode-buttons { display: flex; gap: 0.6rem; margin-top: 0.75rem; }
+  .mode-buttons button { flex: 1; padding: 0.75rem; font-size: 0.9rem; font-weight: 600; }
+  .btn-healthy { background: var(--healthy); }
+  .btn-slow { background: var(--slow); }
+  .btn-error { background: var(--error); }
+  .badge {
+    display: inline-block;
+    padding: 0.3rem 0.8rem;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .badge.healthy { background: color-mix(in srgb, var(--healthy) 25%, transparent); color: var(--healthy); }
+  .badge.slow { background: color-mix(in srgb, var(--slow) 25%, transparent); color: var(--slow); }
+  .badge.error { background: color-mix(in srgb, var(--error) 25%, transparent); color: var(--error); }
+  .badge.unknown { background: color-mix(in srgb, var(--muted) 25%, transparent); color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 0.75rem; }
+  .stat { text-align: center; }
+  .stat .value { font-size: 1.6rem; font-weight: 700; }
+  .stat .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .footer { color: var(--muted); font-size: 0.75rem; text-align: center; margin-top: 1.5rem; }
+  .error-msg { color: var(--error); font-size: 0.8rem; margin-top: 0.5rem; min-height: 1em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Waitly &mdash; Demo Control</h1>
+  <p class="subtitle">Not part of the real product UI. Toggles the protected-site fixture and shows the Queue Controller reacting, live.</p>
+
+  <div class="panel">
+    <h2>Room Admin API endpoint</h2>
+    <div class="row">
+      <input type="text" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
+      <button id="saveApiBase">Save</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Protected site mode</h2>
+    <p>Current: <span id="modeBadge" class="badge unknown">unknown</span></p>
+    <div class="mode-buttons">
+      <button class="btn-healthy" data-mode="healthy">Healthy</button>
+      <button class="btn-slow" data-mode="slow">Slow</button>
+      <button class="btn-error" data-mode="error">Erroring</button>
+    </div>
+    <div class="error-msg" id="modeError"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Demo room (<span id="roomId">-</span>)</h2>
+    <div class="stats">
+      <div class="stat"><div class="value" id="targetRate">-</div><div class="label">Target rate</div></div>
+      <div class="stat"><div class="value" id="waiting">-</div><div class="label">Waiting</div></div>
+      <div class="stat"><div class="value" id="admittedCount">-</div><div class="label">Admitted</div></div>
+    </div>
+  </div>
+
+  <p class="footer">Polling every 2s. Run <code>scripts/probe_protected_site.py</code> to generate traffic for the metrics to react to.</p>
+</div>
+
+<script>
+  const apiBaseInput = document.getElementById("apiBase");
+  const saved = localStorage.getItem("waitly-demo-api-base");
+  if (saved) apiBaseInput.value = saved;
+
+  document.getElementById("saveApiBase").addEventListener("click", () => {
+    localStorage.setItem("waitly-demo-api-base", apiBaseInput.value.trim());
+  });
+
+  function apiBase() {
+    return apiBaseInput.value.trim().replace(/\/$/, "");
+  }
+
+  async function refresh() {
+    const base = apiBase();
+    if (!base) return;
+    try {
+      const resp = await fetch(`${base}/demo/status`);
+      const data = await resp.json();
+
+      const badge = document.getElementById("modeBadge");
+      badge.textContent = data.mode;
+      badge.className = "badge " + (["healthy", "slow", "error"].includes(data.mode) ? data.mode : "unknown");
+
+      if (data.room) {
+        document.getElementById("roomId").textContent = data.room.roomId;
+        document.getElementById("targetRate").textContent = data.room.targetRate;
+        document.getElementById("waiting").textContent = data.room.waiting;
+        document.getElementById("admittedCount").textContent = data.room.admittedCount;
+      }
+    } catch (err) {
+      console.error("refresh failed", err);
+    }
+  }
+
+  document.querySelectorAll(".mode-buttons button").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const base = apiBase();
+      const errEl = document.getElementById("modeError");
+      errEl.textContent = "";
+      if (!base) {
+        errEl.textContent = "Set the API endpoint above first.";
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const resp = await fetch(`${base}/demo/mode`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: btn.dataset.mode }),
+        });
+        if (!resp.ok) {
+          const body = await resp.json().catch(() => ({}));
+          errEl.textContent = body.error || `Request failed (${resp.status})`;
+        }
+        await refresh();
+      } catch (err) {
+        errEl.textContent = String(err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  refresh();
+  setInterval(refresh, 2000);
+</script>
+</body>
+</html>
