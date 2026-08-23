@@ -1,28 +1,27 @@
 #!/usr/bin/env python
 """Build, push, and blue/green-deploy a new revision of an ECS Fargate service.
 
-Every invocation of this script — including the very first one — performs a
-real AWS CodeDeploy blue/green deployment: it registers a new ECS task
-definition revision and asks CodeDeploy to stand up a new task set on
-whichever target group (blue or green) is currently idle, run the canary
-steps, invoke the validation Lambda against the test listener, and only then
-cut prod traffic over. CodeDeploy — not this script — decides which ALB
-target group is "blue" and which is "green" at deploy time; this script only
-ever talks about app *versions* (v1, v2, ...) to avoid confusing that with
-CodeDeploy's own blue/green target-group bookkeeping.
+Every invocation of this script — including the very first one for a given
+service — performs a real AWS CodeDeploy blue/green deployment: it
+registers a new ECS task definition revision and asks CodeDeploy to stand
+up a new task set on whichever target group (blue or green) is currently
+idle, run the canary steps, invoke the validation Lambda against the test
+listener, and only then cut prod traffic over. CodeDeploy — not this
+script — decides which ALB target group is "blue" and which is "green" at
+deploy time; this script only ever talks about app *versions* (v1, v2,
+...) to avoid confusing that with CodeDeploy's own bookkeeping.
 
-Generic across services on purpose: it reads everything (ECR repo, task
-family, container name, task/execution roles, log group, CodeDeploy
-app/deployment group, validation Lambda ARN) from `terraform output -json`
-in infra/live rather than hardcoding a single service, and the app's build
-context is assumed to live at apps/<container_name>/. That's what makes
-this the reusable "known-good template" the Admission API cloned from
-hello-world's proof, and what future services (Queue Controller) can clone
-from too, without editing this script.
+Generic across services on purpose: `terraform output -json` in
+infra/live exposes one object per service (see outputs.tf), keyed by
+service name with underscores (e.g. "admission_api", "queue_controller").
+This script reads everything it needs from that object rather than
+hardcoding a single service, and assumes the app's build context lives at
+apps/<container_name>/. That's what makes this the reusable "known-good
+template" every service clones from — no per-service edits needed here.
 
 Usage:
-    python scripts/deploy.py v1
-    python scripts/deploy.py v2
+    python scripts/deploy.py admission-api v1
+    python scripts/deploy.py queue-controller v1
 
 Requires: docker, aws CLI, terraform — all on PATH — and active AWS
 credentials.
@@ -59,23 +58,32 @@ def terraform_outputs():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("service", help="Service name, e.g. admission-api or queue-controller")
     parser.add_argument("version", help="Version label used as the ECR image tag, e.g. v1")
     parser.add_argument("--color", default="steelblue", help="Cosmetic build-arg some apps (e.g. hello-world) use; harmless if unused")
     parser.add_argument("--skip-build", action="store_true", help="Skip docker build/push, reuse an already-pushed tag")
     args = parser.parse_args()
 
     outputs = terraform_outputs()
-    ecr_url = outputs["ecr_repository_url"]
+    service_key = args.service.replace("-", "_")
+    if service_key not in outputs:
+        available = ", ".join(k.replace("_", "-") for k in outputs if isinstance(outputs[k], dict))
+        print(f"Unknown service '{args.service}'. Available: {available}")
+        sys.exit(1)
+    svc = outputs[service_key]
+
     region = outputs["region"]
-    family = outputs["task_definition_family"]
-    container_name = outputs["container_name"]
     exec_role_arn = outputs["ecs_task_execution_role_arn"]
-    task_role_arn = outputs.get("ecs_task_role_arn")  # not every service needs one
     table_name = outputs.get("dynamodb_table_name")  # not every service uses DynamoDB
-    log_group = outputs["log_group_name"]
-    app_name = outputs["codedeploy_app_name"]
-    dg_name = outputs["codedeploy_deployment_group_name"]
-    lambda_arn = outputs["validation_lambda_arn"]
+
+    ecr_url = svc["ecr_repository_url"]
+    container_name = svc["container_name"]
+    family = svc["task_definition_family"]
+    task_role_arn = svc.get("task_role_arn")
+    log_group = svc["log_group_name"]
+    app_name = svc["codedeploy_app_name"]
+    dg_name = svc["codedeploy_deployment_group_name"]
+    lambda_arn = svc["validation_lambda_arn"]
 
     app_dir = REPO_ROOT / "apps" / container_name
     image_uri = f"{ecr_url}:{args.version}"

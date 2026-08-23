@@ -39,3 +39,9 @@ variable "admission_api_container_port" {
   type        = number
   default     = 80
 }
+
+variable "queue_controller_container_port" {
+  description = "Port the Queue Controller container listens on (health check only, no real traffic)."
+  type        = number
+  default     = 80
+}

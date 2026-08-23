@@ -1,3 +1,29 @@
+# --- Known, deliberate tradeoff: CodeDeploy test listeners are public ---
+#
+# Every service's CodeDeploy test listener (:8080 admission-api, :8091
+# queue-controller, and any future service's) is open to 0.0.0.0/0. This
+# is intentional, not an oversight -- reviewed and accepted below.
+#
+# What's exposed: a GET-only, no-auth /health endpoint per service,
+# returning a static {"status":"ok"} shape. No data, no state change, no
+# secrets.
+#
+# Why it's open: each service's validation Lambda (the AfterAllowTestTraffic
+# CodeDeploy hook) calls its test listener over the public internet, because
+# the Lambda deliberately has no VPC config -- see CLAUDE.md's rationale for
+# keeping Lambda services VPC-free. A non-VPC Lambda's outbound IP is an
+# unpredictable AWS-managed address, so there's no real CIDR to scope
+# ingress to.
+#
+# The production fix, if this were a real system instead of a portfolio
+# project: put every validation Lambda inside the VPC (its own subnet +
+# security group), restrict each test listener's ingress to just that
+# Lambda's security group, and add one interface VPC endpoint for
+# `codedeploy` (~$7.30/mo, single-AZ) so the now-VPC-attached Lambdas can
+# still call codedeploy:PutLifecycleEventHookExecutionStatus without
+# internet egress. Deliberately not done here: the cost and added
+# complexity aren't justified by the actual exposure (a read-only health
+# check) at this project's scale.
 resource "aws_security_group" "alb" {
   name        = "${var.project}-alb-sg"
   description = "Hello-world ALB: inbound HTTP from the internet on the prod and CodeDeploy test listeners"
@@ -12,9 +38,23 @@ resource "aws_security_group" "alb" {
   }
 
   ingress {
-    description = "CodeDeploy test listener (canary validation traffic)"
+    description = "CodeDeploy test listener (canary validation traffic) -- see tradeoff note above"
     from_port   = 8080
     to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Queue Controller's prod listener (:8090) deliberately gets NO ingress
+  # rule at all. Nothing ever routes real traffic to it -- it only exists
+  # because CodeDeploy's target_group_pair_info schema requires a prod
+  # route alongside the test route. ALB-to-target health checks don't go
+  # through this either; those are governed by the ECS tasks' security
+  # group, not the listener's. So there is nothing for this port to serve.
+  ingress {
+    description = "Queue Controller CodeDeploy test listener -- see tradeoff note above"
+    from_port   = 8091
+    to_port     = 8091
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
