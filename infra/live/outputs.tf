@@ -60,3 +60,15 @@ output "queue_controller" {
     test_listener_arn                = aws_lb_listener.queue_controller_test.arn
   }
 }
+
+# Lambda services use a different shape (no ECR/ECS fields) - read by
+# scripts/deploy_lambda.py instead of scripts/deploy.py.
+output "room_admin_api" {
+  value = {
+    function_name                    = aws_lambda_function.room_admin_api.function_name
+    alias_name                       = aws_lambda_alias.room_admin_api_live.name
+    codedeploy_app_name              = aws_codedeploy_app.room_admin_api.name
+    codedeploy_deployment_group_name = aws_codedeploy_deployment_group.room_admin_api.deployment_group_name
+    api_endpoint                     = aws_apigatewayv2_stage.room_admin_api_default.invoke_url
+  }
+}

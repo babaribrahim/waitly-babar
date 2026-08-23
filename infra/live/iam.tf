@@ -52,7 +52,24 @@ resource "aws_iam_role_policy_attachment" "codedeploy_ecs" {
   policy_arn = "arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS"
 }
 
-# --- Shared assume-role policy for every service's validation Lambda ---
+# --- CodeDeploy service role: drives Lambda alias traffic shifting ---
+# A separate managed policy from the ECS one above (Lambda deployments use
+# alias weighted-routing, not target groups), otherwise the same idea.
+
+resource "aws_iam_role" "codedeploy_lambda" {
+  name               = "${var.project}-codedeploy-lambda-role"
+  assume_role_policy = data.aws_iam_policy_document.codedeploy_assume.json
+
+  tags = { Name = "${var.project}-codedeploy-lambda-role" }
+}
+
+resource "aws_iam_role_policy_attachment" "codedeploy_lambda" {
+  role       = aws_iam_role.codedeploy_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda"
+}
+
+# --- Shared assume-role policy for every service's Lambda functions ---
+# (validation-hook Lambdas and any real Lambda service, e.g. Room Admin API)
 
 data "aws_iam_policy_document" "validation_lambda_assume" {
   statement {

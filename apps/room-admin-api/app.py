@@ -1,0 +1,208 @@
+"""Room Admin API - AWS Lambda behind API Gateway (HTTP API).
+
+For event organizers, not visitors. Low traffic, no VPC (reaches DynamoDB
+directly). Plain stdlib handler, no framework - a Lambda this small and
+infrequently invoked doesn't need one, and it keeps cold starts minimal.
+
+Routes (dispatched on API Gateway's routeKey, payload format 2.0):
+  POST  /rooms            create a room, returns the admin key ONCE
+  GET   /rooms            list all rooms (name/id only, no auth)
+  GET   /rooms/{roomId}   live stats, requires X-Admin-Key
+  PATCH /rooms/{roomId}   update targetRate, requires X-Admin-Key
+
+Auth is a simple admin-key-hash check per room (CLAUDE.md is explicit this
+is proportionate to project scope, not a full auth system) - only the
+SHA-256 hash is ever stored; the raw key is returned exactly once, at
+creation time, and never persisted.
+"""
+
+import hashlib
+import hmac
+import json
+import os
+import secrets
+from datetime import datetime, timezone
+
+import boto3
+from botocore.exceptions import ClientError
+
+TABLE_NAME = os.environ["TABLE_NAME"]
+AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
+
+# Unset until the frontend phase exists - publicLink is null until then,
+# no code change needed later, just set this env var on the function.
+FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "")
+
+# Must match the Queue Controller's POLL_INTERVAL_SECONDS for avgWaitSeconds
+# to be a meaningful estimate - both default to 5s.
+POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "5"))
+
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+table = dynamodb.Table(TABLE_NAME)
+
+
+def _response(status, body):
+    return {
+        "statusCode": status,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(body),
+    }
+
+
+def _hash_key(raw_key: str) -> str:
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def _headers_lower(event):
+    return {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+
+
+def _check_admin_key(room, event) -> bool:
+    provided = _headers_lower(event).get("x-admin-key", "")
+    expected = room.get("adminKeyHash", "")
+    if not provided or not expected:
+        return False
+    return hmac.compare_digest(_hash_key(provided), expected)
+
+
+def _get_room(room_id):
+    resp = table.get_item(Key={"PK": f"ROOM#{room_id}", "SK": "META"})
+    return resp.get("Item")
+
+
+def create_room(event):
+    body = json.loads(event.get("body") or "{}")
+    name = body.get("name")
+    protected_url = body.get("protectedUrl")
+    target_rate = int(body.get("targetRate", 1))
+
+    if not name or not protected_url:
+        return _response(400, {"error": "name and protectedUrl are required"})
+    if target_rate < 1:
+        return _response(400, {"error": "targetRate must be at least 1"})
+
+    admin_key = secrets.token_urlsafe(24)
+    item_base = {
+        "SK": "META",
+        "name": name,
+        "protectedUrl": protected_url,
+        "targetRate": target_rate,
+        "nextNumber": 0,
+        "admittedCount": 0,
+        "adminKeyHash": _hash_key(admin_key),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Random id, so a collision is exceedingly unlikely - retry a couple
+    # times anyway rather than assume it can never happen.
+    for _ in range(3):
+        room_id = secrets.token_urlsafe(6)
+        try:
+            table.put_item(
+                Item={"PK": f"ROOM#{room_id}", **item_base},
+                ConditionExpression="attribute_not_exists(PK)",
+            )
+            break
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+    else:
+        return _response(500, {"error": "could not allocate a room id, try again"})
+
+    public_link = f"{FRONTEND_BASE_URL}/room/{room_id}" if FRONTEND_BASE_URL else None
+
+    return _response(201, {
+        "roomId": room_id,
+        "adminKey": admin_key,
+        "publicLink": public_link,
+    })
+
+
+def list_rooms(event):
+    # Deliberately unauthenticated: no owner/tenant model exists in the
+    # schema, so anyone can enumerate all rooms. Known and accepted at
+    # this project's scope, see the comment in room_admin_api.tf.
+    resp = table.scan(FilterExpression="SK = :meta", ExpressionAttributeValues={":meta": "META"})
+    rooms = [
+        {
+            "roomId": item["PK"].split("#", 1)[1],
+            "name": item.get("name"),
+            "createdAt": item.get("createdAt"),
+        }
+        for item in resp.get("Items", [])
+    ]
+    return _response(200, {"rooms": rooms})
+
+
+def get_room_stats(event):
+    room_id = event["pathParameters"]["roomId"]
+    room = _get_room(room_id)
+    if not room:
+        return _response(404, {"error": "room not found"})
+    if not _check_admin_key(room, event):
+        return _response(401, {"error": "invalid or missing admin key"})
+
+    next_number = int(room.get("nextNumber", 0))
+    admitted_count = int(room.get("admittedCount", 0))
+    target_rate = int(room.get("targetRate", 0))
+    waiting = max(next_number - admitted_count, 0)
+
+    # Rough estimate, not a measured value: at the current rate, how long
+    # would someone at the back of the line wait. Good enough for a demo
+    # dashboard stat, not a promise.
+    avg_wait_seconds = round((waiting / target_rate) * POLL_INTERVAL_SECONDS) if target_rate > 0 else None
+
+    return _response(200, {
+        "roomId": room_id,
+        "name": room.get("name"),
+        "waiting": waiting,
+        "admittedCount": admitted_count,
+        "targetRate": target_rate,
+        "avgWaitSeconds": avg_wait_seconds,
+    })
+
+
+def update_room(event):
+    room_id = event["pathParameters"]["roomId"]
+    room = _get_room(room_id)
+    if not room:
+        return _response(404, {"error": "room not found"})
+    if not _check_admin_key(room, event):
+        return _response(401, {"error": "invalid or missing admin key"})
+
+    body = json.loads(event.get("body") or "{}")
+    if "targetRate" not in body:
+        return _response(400, {"error": "targetRate is required"})
+
+    new_rate = int(body["targetRate"])
+    if new_rate < 1:
+        return _response(400, {"error": "targetRate must be at least 1"})
+
+    table.update_item(
+        Key={"PK": f"ROOM#{room_id}", "SK": "META"},
+        UpdateExpression="SET targetRate = :r",
+        ExpressionAttributeValues={":r": new_rate},
+    )
+
+    return _response(200, {"roomId": room_id, "targetRate": new_rate})
+
+
+ROUTES = {
+    "POST /rooms": create_room,
+    "GET /rooms": list_rooms,
+    "GET /rooms/{roomId}": get_room_stats,
+    "PATCH /rooms/{roomId}": update_room,
+}
+
+
+def handler(event, context):
+    route_key = event.get("routeKey", "")
+    fn = ROUTES.get(route_key)
+    if not fn:
+        return _response(404, {"error": "not found"})
+
+    try:
+        return fn(event)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error handling {route_key}: {exc}")
+        return _response(500, {"error": "internal error"})
