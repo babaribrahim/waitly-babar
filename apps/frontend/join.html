@@ -154,11 +154,15 @@
 </div>
 
 <script>
-  // Admission API's ALB DNS name. No Route 53/CloudFront in front of it yet
-  // (deliberately deferred — see CLAUDE.md) so this is the raw AWS-generated
-  // address. Override with ?api=... for local testing against a different
-  // stack.
-  const DEFAULT_API_BASE = "http://waitly-hw-alb-1872850869.us-west-2.elb.amazonaws.com";
+  // Routed through CloudFront's /rooms/* behavior (cloudfront.tf), not the
+  // raw ALB DNS name directly - this page is served over HTTPS now, and a
+  // fetch() to a plain-HTTP ALB from an HTTPS page is blocked outright by
+  // the browser's mixed-content policy. CloudFront terminates HTTPS here
+  // and forwards to the ALB over HTTP internally, so the app code on the
+  // other end needs no change. Override with ?api=... for local testing
+  // against a different stack (e.g. the raw ALB, over plain HTTP, when
+  // this page itself is opened locally rather than through CloudFront).
+  const DEFAULT_API_BASE = "https://waitly.internship.cloudelligent-sandbox.com";
 
   const params = new URLSearchParams(location.search);
   const apiBase = (params.get("api") || DEFAULT_API_BASE).replace(/\/$/, "");

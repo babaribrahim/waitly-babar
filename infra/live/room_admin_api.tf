@@ -88,9 +88,14 @@ resource "aws_lambda_function" "room_admin_api" {
     variables = {
       TABLE_NAME            = aws_dynamodb_table.main.name
       POLL_INTERVAL_SECONDS = "5"
-      # FRONTEND_BASE_URL deliberately unset until the frontend phase
-      # exists - publicLink comes back null until then, no code change
-      # needed later, just set this variable.
+      # Frontend now exists (cloudfront.tf) - publicLink returns a real
+      # URL. Hardcoded rather than referencing the CloudFront resource
+      # directly: the domain name is fixed and known ahead of the
+      # distribution's own outputs (it's the alias, not the
+      # *.cloudfront.net name), and referencing it directly would add an
+      # unnecessary dependency edge between two otherwise-unrelated
+      # Terraform files.
+      FRONTEND_BASE_URL = "https://waitly.internship.cloudelligent-sandbox.com"
 
       # Same dimensions queue_controller.tf passes its service - lets
       # GET /demo/status report on the identical metric the Queue

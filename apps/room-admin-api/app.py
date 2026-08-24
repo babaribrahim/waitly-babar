@@ -141,7 +141,12 @@ def create_room(event):
     else:
         return _response(500, {"error": "could not allocate a room id, try again"})
 
-    public_link = f"{FRONTEND_BASE_URL}/room/{room_id}" if FRONTEND_BASE_URL else None
+    # room.html reads the room id from a query param (?id=...), not a
+    # path segment - matches apps/frontend/room.html's actual
+    # `params.get("id")`, not the /room/{roomId} shape this used to be
+    # (never worked, never had a live FRONTEND_BASE_URL to notice against
+    # until now).
+    public_link = f"{FRONTEND_BASE_URL}/room.html?id={room_id}" if FRONTEND_BASE_URL else None
 
     return _response(201, {
         "roomId": room_id,

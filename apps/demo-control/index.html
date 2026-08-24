@@ -1,19 +1,26 @@
 <!doctype html>
 <!--
   Demo-control page. NOT part of the real product UI, not linked from the
-  organizer dashboard. Open this file directly in a browser (file://) or
-  serve it however's convenient - it has no build step and no dependency
-  on the real frontend existing.
+  organizer dashboard. Served from CloudFront at
+  https://waitly.internship.cloudelligent-sandbox.com/demo-control/ (see
+  cloudfront.tf) - no terminal or local server needed for a live demo.
+  Also still openable directly as a local file (file://) or via any local
+  static server; nothing here depends on how it's served.
 
   Paste the Room Admin API's endpoint (terraform output room_admin_api ->
   api_endpoint) into the field below once; it's saved in this browser's
   localStorage so you don't have to re-enter it next time.
 
-  Talks only to three deliberately unauthenticated demo routes on the Room
-  Admin API (GET /demo/status, POST /demo/mode, POST /demo/reset) - see app.py and
-  room_admin_api.tf for why that's fine at this project's scope. The
-  browser never touches DynamoDB directly; the Lambda holds that
-  permission and the mode lives as one item in the shared table.
+  Talks to three deliberately unauthenticated demo routes on the Room
+  Admin API directly (GET /demo/status, POST /demo/mode, POST
+  /demo/reset - see app.py and room_admin_api.tf for why that's fine at
+  this project's scope), plus the Admission API's /rooms/*/join and the
+  protected-site fixture's "/" - both routed through CloudFront's
+  /rooms/* and /fixture/* behaviors (cloudfront.tf), not the raw ALB, so
+  they work from this HTTPS page without tripping mixed-content
+  blocking. The browser never touches DynamoDB directly; the Lambda
+  holds that permission and the mode lives as one item in the shared
+  table.
 -->
 <html lang="en">
 <head>
@@ -262,7 +269,20 @@
     <div class="error-msg" id="resetError"></div>
   </div>
 
-  <p class="footer">Polling every 2s. Run <code>python scripts/probe_protected_site.py --rate 3</code> to generate the traffic these metrics depend on.</p>
+  <div class="panel">
+    <h2 class="eyebrow">Traffic generators</h2>
+    <div class="reset-row" style="border-top: none; padding-top: 0; margin-top: 0;">
+      <button class="btn" id="proberBtn">Start prober</button>
+      <span class="reset-hint" id="proberHint">Sends real requests to the fixture every ~300ms - what the traffic banner above is reading. Stop before you leave the page, it doesn't stop itself.</span>
+    </div>
+    <div class="reset-row">
+      <button class="btn" id="seedBtn">Seed backlog</button>
+      <span class="reset-hint" id="seedHint">Fires ~200 concurrent real joins into the tracked room - builds a visible waiting backlog in a few seconds. See DEMO.md for the full sequence.</span>
+    </div>
+    <div class="error-msg" id="generatorError"></div>
+  </div>
+
+  <p class="footer">Polling every 2s.</p>
 </div>
 
 <script>
@@ -392,6 +412,89 @@
       await refresh();
     } catch (err) {
       errEl.textContent = String(err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // --- Traffic generators: replace scripts/probe_protected_site.py and
+  // the k6 seed burst with pure client-side JS, so the whole demo runs
+  // from browser tabs with no terminal open. Both call through
+  // CloudFront's /rooms/* and /fixture/* behaviors (cloudfront.tf), not
+  // the raw ALB - this page is served over HTTPS, and a fetch() straight
+  // to the HTTP-only ALB would be blocked by the browser's mixed-content
+  // policy regardless of CORS.
+  const SITE_BASE = "https://waitly.internship.cloudelligent-sandbox.com";
+
+  // Prober: continuous low-rate traffic to the protected-site fixture, so
+  // CloudWatch has something real to read (see the traffic banner above -
+  // this is literally what feeds requestsLast60s). {mode: "no-cors"}
+  // because the point is generating a real request the ALB/fixture sees
+  // and times, not reading the response - no-cors sidesteps needing CORS
+  // headers on the fixture (it has none) while still sending a real
+  // request. Runs until you click Stop - it deliberately does not stop
+  // itself, same as the old terminal version didn't.
+  let proberTimer = null;
+
+  document.getElementById("proberBtn").addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    if (proberTimer) {
+      clearInterval(proberTimer);
+      proberTimer = null;
+      btn.textContent = "Start prober";
+      btn.classList.remove("active");
+      return;
+    }
+    btn.textContent = "Stop prober";
+    btn.classList.add("active");
+    proberTimer = setInterval(() => {
+      fetch(`${SITE_BASE}/fixture/`, { mode: "no-cors" }).catch(() => {});
+    }, 300);
+  });
+
+  // Seed backlog: fires a burst of real concurrent joins into whichever
+  // room demo-control is currently tracking (same "most recently
+  // created room" demo-status already follows). Client-side concurrency
+  // via Promise.all/fetch turned out to comfortably outperform a Python
+  // urllib/ThreadPoolExecutor seeder (isolated testing put urllib at
+  // ~600-700ms/call with no connection reuse, degrading to an avg of
+  // 6.8s/call under concurrency) - the browser's own networking stack
+  // handles many concurrent connections natively.
+  document.getElementById("seedBtn").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const errEl = document.getElementById("generatorError");
+    errEl.textContent = "";
+    const base = apiBase();
+    if (!base) {
+      errEl.textContent = "Set the API endpoint above first.";
+      return;
+    }
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    try {
+      const statusResp = await fetch(`${base}/demo/status`);
+      const status = await statusResp.json();
+      const roomId = status.room && status.room.roomId;
+      if (!roomId) {
+        errEl.textContent = "No room to seed yet - create one first.";
+        return;
+      }
+      btn.textContent = "Seeding...";
+      const N = 200;
+      const results = await Promise.all(
+        Array.from({ length: N }, () =>
+          fetch(`${SITE_BASE}/rooms/${roomId}/join`, { method: "POST" })
+            .then((r) => r.ok)
+            .catch(() => false)
+        )
+      );
+      const ok = results.filter(Boolean).length;
+      btn.textContent = `Seeded ${ok}/${N}`;
+      await refresh();
+      setTimeout(() => { btn.textContent = originalText; }, 3000);
+    } catch (err) {
+      errEl.textContent = String(err);
+      btn.textContent = originalText;
     } finally {
       btn.disabled = false;
     }
