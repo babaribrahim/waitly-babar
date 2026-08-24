@@ -27,8 +27,20 @@
 data "aws_caller_identity" "current" {}
 
 locals {
+  # Source is a personal mirror repo (babaribrahim/waitly-babar), not the
+  # shared awabamjad1/internship-program-2026 repo directly - same pattern
+  # other interns already use. The shared repo is private and owned by a
+  # different person; GitHub App repo-access grants are controlled by the
+  # repo owner, not collaborators, so no connection available in this
+  # account could be pointed at it without Awab's own action. Mirroring to
+  # a repo Ibrahim owns sidesteps that entirely - the "ibrahim.babar"
+  # connection (already AVAILABLE, tied to his own account) works
+  # immediately against a repo he actually owns. Code still lives on
+  # feature/waiting-room-babar in the real shared repo too (origin remote,
+  # untouched) - this mirror exists only so CodePipeline has something it
+  # can authorize against.
   codestar_connection_arn = "arn:aws:codeconnections:us-west-2:395063533284:connection/b47e864f-7e26-48ad-a1c8-57f469fa5c20"
-  github_repo_id          = "awabamjad1/internship-program-2026"
+  github_repo_id          = "babaribrahim/waitly-babar"
   github_branch           = "feature/waiting-room-babar"
 }
 
@@ -286,11 +298,93 @@ resource "aws_codebuild_project" "admission_api" {
   tags = { Name = "${var.project}-admission-api-build" }
 }
 
+# --- Queue Controller: CodeBuild project ---
+# Same buildspec, same shape as Admission API's project above - only the
+# per-service environment variables differ.
+
+resource "aws_codebuild_project" "queue_controller" {
+  name         = "${var.project}-queue-controller-build"
+  service_role = aws_iam_role.codebuild.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    type                        = "LINUX_CONTAINER"
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+    privileged_mode             = true
+    image_pull_credentials_type = "CODEBUILD"
+
+    environment_variable {
+      name  = "SERVICE_DIR"
+      value = "queue-controller"
+    }
+    environment_variable {
+      name  = "ECR_REPO_URI"
+      value = aws_ecr_repository.queue_controller.repository_url
+    }
+    environment_variable {
+      name  = "SSM_HASH_PARAM"
+      value = "/${var.project}/pipeline/queue-controller/last-built-hash"
+    }
+    environment_variable {
+      name  = "SSM_IMAGE_TAG_PARAM"
+      value = "/${var.project}/pipeline/queue-controller/last-built-image-tag"
+    }
+    environment_variable {
+      name  = "TASK_FAMILY"
+      value = aws_ecs_task_definition.queue_controller.family
+    }
+    environment_variable {
+      name  = "CONTAINER_NAME"
+      value = "queue-controller"
+    }
+    environment_variable {
+      name  = "CONTAINER_PORT"
+      value = tostring(var.queue_controller_container_port)
+    }
+    environment_variable {
+      name  = "EXEC_ROLE_ARN"
+      value = aws_iam_role.ecs_task_execution.arn
+    }
+    environment_variable {
+      name  = "TASK_ROLE_ARN"
+      value = aws_iam_role.queue_controller_task.arn
+    }
+    environment_variable {
+      name  = "LOG_GROUP"
+      value = aws_cloudwatch_log_group.queue_controller.name
+    }
+    environment_variable {
+      name  = "VALIDATION_LAMBDA_ARN"
+      value = aws_lambda_function.queue_controller_validate.arn
+    }
+    environment_variable {
+      name = "CONTAINER_ENV_JSON"
+      value = jsonencode([
+        { name = "TABLE_NAME", value = aws_dynamodb_table.main.name },
+        { name = "AWS_REGION", value = var.region },
+        { name = "PROTECTED_SITE_LB_ARN_SUFFIX", value = aws_lb.hello_world.arn_suffix },
+        { name = "PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX", value = aws_lb_target_group.protected_site.arn_suffix },
+      ])
+    }
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = file("${path.module}/buildspecs/ecs_service_build.yml")
+  }
+
+  tags = { Name = "${var.project}-queue-controller-build" }
+}
+
 # --- The pipeline itself ---
-# Only the Admission API's stages are wired so far - deliberate, per the
-# "get one service working end to end before wiring the other two" build
-# order. Queue Controller and Room Admin API stages follow the same
-# Source -> Build -> Deploy shape once this one's verified.
+# Room Admin API's stages aren't wired yet - deliberate, per the "get one
+# service working end to end before wiring the other two" build order.
+# It follows a different deploy mechanism (Lambda alias shift, not
+# CodeDeployToECS) once Queue Controller here is verified.
 
 resource "aws_codepipeline" "main" {
   name     = "${var.project}-pipeline"
@@ -357,6 +451,48 @@ resource "aws_codepipeline" "main" {
         AppSpecTemplateArtifact        = "admission_api_build_output"
         AppSpecTemplatePath            = "appspec.yaml"
         Image1ArtifactName             = "admission_api_build_output"
+        Image1ContainerName            = "IMAGE1_NAME"
+      }
+    }
+  }
+
+  stage {
+    name = "Build-QueueController"
+
+    action {
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source_output"]
+      output_artifacts = ["queue_controller_build_output"]
+
+      configuration = {
+        ProjectName = aws_codebuild_project.queue_controller.name
+      }
+    }
+  }
+
+  stage {
+    name = "Deploy-QueueController"
+
+    action {
+      name            = "Deploy"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "CodeDeployToECS"
+      version         = "1"
+      input_artifacts = ["queue_controller_build_output"]
+
+      configuration = {
+        ApplicationName                = aws_codedeploy_app.queue_controller.name
+        DeploymentGroupName            = aws_codedeploy_deployment_group.queue_controller.deployment_group_name
+        TaskDefinitionTemplateArtifact = "queue_controller_build_output"
+        TaskDefinitionTemplatePath     = "taskdef.json"
+        AppSpecTemplateArtifact        = "queue_controller_build_output"
+        AppSpecTemplatePath            = "appspec.yaml"
+        Image1ArtifactName             = "queue_controller_build_output"
         Image1ContainerName            = "IMAGE1_NAME"
       }
     }
