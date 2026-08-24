@@ -68,6 +68,27 @@ resource "aws_iam_role_policy_attachment" "codedeploy_lambda" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda"
 }
 
+# scripts/deploy_lambda.py never needed this - it always passes the
+# AppSpec inline (AppSpecContent), so CodeDeploy never had to read it
+# from anywhere. CodePipeline's CodeDeploy action is different: it hands
+# CodeDeploy an S3-based revision (the AppSpec artifact sitting in the
+# pipeline's own bucket), so the first time that path actually ran it
+# failed with IAM_ROLE_PERMISSIONS - AWSCodeDeployRoleForLambda covers
+# Lambda alias/version operations and CloudWatch alarms, not S3 reads.
+resource "aws_iam_role_policy" "codedeploy_lambda_pipeline_artifacts" {
+  name = "${var.project}-codedeploy-lambda-s3"
+  role = aws_iam_role.codedeploy_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:GetObjectVersion"]
+      Resource = "${aws_s3_bucket.pipeline_artifacts.arn}/*"
+    }]
+  })
+}
+
 # --- Shared assume-role policy for every service's Lambda functions ---
 # (validation-hook Lambdas and any real Lambda service, e.g. Room Admin API)
 
