@@ -34,6 +34,7 @@ import hmac
 import json
 import os
 import secrets
+import time
 from datetime import datetime, timezone
 
 import boto3
@@ -42,6 +43,12 @@ from botocore.exceptions import ClientError
 
 TABLE_NAME = os.environ["TABLE_NAME"]
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
+
+# Same ALB/target-group the Queue Controller polls (queue_controller.tf
+# passes it the identical two values) - unset until the protected-site
+# fixture exists, same pattern as that service's own env vars.
+PROTECTED_SITE_LB_ARN_SUFFIX = os.environ.get("PROTECTED_SITE_LB_ARN_SUFFIX", "")
+PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX = os.environ.get("PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX", "")
 
 # Unset until the frontend phase exists - publicLink is null until then,
 # no code change needed later, just set this env var on the function.
@@ -63,6 +70,7 @@ BOTO_CONFIG = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts":
 
 dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION, config=BOTO_CONFIG)
 table = dynamodb.Table(TABLE_NAME)
+cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION, config=BOTO_CONFIG)
 
 
 def _response(status, body):
@@ -220,6 +228,55 @@ def _most_recent_room():
     return max(items, key=lambda r: r.get("createdAt", ""), default=None)
 
 
+def _recent_traffic_request_count():
+    """Sum of real requests the protected-site ALB target group has seen in
+    the last 60s, or None if the fixture isn't configured yet.
+
+    Toggling the fixture's mode only changes how it *responds* - it does
+    nothing on its own to make any request happen. The Queue Controller's
+    AIMD loop only ever sees "unhealthy" from actual routed requests
+    landing on this target group (CloudWatch's TargetResponseTime /
+    HTTPCode_Target_5XX_Count don't populate from the ALB's own health
+    checks - see CLAUDE.md's demo/testing section and
+    scripts/probe_protected_site.py's docstring). With zero requests,
+    GetMetricData returns no datapoints at all, and the controller's own
+    `(values_by_id.get(...) or [0.0])[0]` fallback reads that as "0ms
+    latency, 0 errors" - i.e. healthy - regardless of which mode is set.
+    Surfacing the request count directly is what makes that gap visible
+    instead of looking like a broken controller.
+    """
+    if not PROTECTED_SITE_LB_ARN_SUFFIX or not PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX:
+        return None
+
+    dimensions = [
+        {"Name": "LoadBalancer", "Value": PROTECTED_SITE_LB_ARN_SUFFIX},
+        {"Name": "TargetGroup", "Value": PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX},
+    ]
+    try:
+        resp = cloudwatch.get_metric_data(
+            StartTime=time.time() - 60,
+            EndTime=time.time(),
+            MetricDataQueries=[{
+                "Id": "requests",
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/ApplicationELB",
+                        "MetricName": "RequestCount",
+                        "Dimensions": dimensions,
+                    },
+                    "Period": 60,
+                    "Stat": "Sum",
+                },
+                "ReturnData": True,
+            }],
+        )
+        values = resp["MetricDataResults"][0]["Values"]
+        return int(values[0]) if values else 0
+    except ClientError as exc:
+        print(f"failed to read traffic metric: {exc}")
+        return None
+
+
 def demo_status(event):
     # Deliberately unauthenticated demo-only endpoint - see module docstring.
     mode = "unknown"
@@ -245,7 +302,11 @@ def demo_status(event):
             "waiting": max(next_number - admitted_count, 0),
         }
 
-    return _response(200, {"mode": mode, "room": room_stats})
+    return _response(200, {
+        "mode": mode,
+        "room": room_stats,
+        "requestsLast60s": _recent_traffic_request_count(),
+    })
 
 
 def demo_set_mode(event):

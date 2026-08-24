@@ -32,6 +32,29 @@ resource "aws_iam_role_policy" "room_admin_api_dynamodb" {
   })
 }
 
+# Read-only access to the same ALB/target-group metrics the Queue
+# Controller already polls (see queue_controller.tf's identical policy) -
+# GET /demo/status uses this to report whether real traffic is currently
+# reaching the protected-site fixture, since CloudWatch's RequestCount
+# only populates from routed requests, not ALB health checks. Without
+# this, toggling the fixture to "error"/"slow" with no prober running
+# looks identical to a broken controller - nothing to react to either
+# way. GetMetricData has no resource-level restriction in IAM - AWS
+# requires Resource "*" for it, same as queue_controller_cloudwatch.
+resource "aws_iam_role_policy" "room_admin_api_cloudwatch" {
+  name = "${var.project}-room-admin-api-cloudwatch"
+  role = aws_iam_role.room_admin_api.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["cloudwatch:GetMetricData"]
+      Resource = "*"
+    }]
+  })
+}
+
 # No separate SSM/demo-mode IAM policy needed: the /demo/mode route
 # (apps/demo-control/index.html) writes to the same DynamoDB table via
 # room_admin_api_dynamodb above (PK=CONFIG#protected-site, SK=MODE) -
@@ -68,6 +91,12 @@ resource "aws_lambda_function" "room_admin_api" {
       # FRONTEND_BASE_URL deliberately unset until the frontend phase
       # exists - publicLink comes back null until then, no code change
       # needed later, just set this variable.
+
+      # Same dimensions queue_controller.tf passes its service - lets
+      # GET /demo/status report on the identical metric the Queue
+      # Controller's AIMD loop actually reacts to, not a proxy for it.
+      PROTECTED_SITE_LB_ARN_SUFFIX           = aws_lb.hello_world.arn_suffix
+      PROTECTED_SITE_TARGET_GROUP_ARN_SUFFIX = aws_lb_target_group.protected_site.arn_suffix
     }
   }
 

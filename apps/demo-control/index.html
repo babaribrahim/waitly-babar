@@ -170,6 +170,46 @@
     border-radius: 4px;
     font-size: 0.85em;
   }
+
+  /* --- Traffic banner: loud on purpose. Toggling mode with no prober
+     running does nothing visible - this is what stops that from
+     happening silently mid-demo. --- */
+  .traffic-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.9rem 1.1rem;
+    border-radius: 10px;
+    margin-bottom: 1.25rem;
+    font-size: 0.9rem;
+    border: 1px solid transparent;
+  }
+
+  .traffic-banner.no-traffic {
+    background: rgba(239, 84, 104, 0.12);
+    border-color: var(--error);
+    color: var(--error);
+  }
+
+  .traffic-banner.has-traffic {
+    background: rgba(47, 212, 122, 0.12);
+    border-color: var(--healthy);
+    color: var(--healthy);
+  }
+
+  .traffic-banner.unknown {
+    background: var(--bg-panel-raised);
+    border-color: var(--border);
+    color: var(--text-muted);
+  }
+
+  .traffic-banner strong {
+    font-family: var(--font-mono);
+  }
+
+  .traffic-banner code {
+    color: var(--text);
+  }
 </style>
 </head>
 <body>
@@ -183,6 +223,11 @@
       <input type="text" class="input mono" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
       <button class="btn" id="saveApiBase">Save</button>
     </div>
+  </div>
+
+  <div class="traffic-banner unknown" id="trafficBanner">
+    <span id="trafficIcon">&#9679;</span>
+    <span id="trafficText">Checking for traffic&hellip;</span>
   </div>
 
   <div class="panel rate-panel">
@@ -262,8 +307,40 @@
         document.getElementById("admittedCount").textContent = data.room.admittedCount;
         document.getElementById("lastUpdated").textContent = new Date().toLocaleTimeString();
       }
+
+      updateTrafficBanner(data.requestsLast60s);
     } catch (err) {
       console.error("refresh failed", err);
+    }
+  }
+
+  // Toggling mode changes how the fixture WOULD respond - it does nothing
+  // by itself. The Queue Controller only reacts to real routed requests
+  // (see scripts/probe_protected_site.py's docstring), so with nobody
+  // sending traffic, "Erroring" looks identical to "Healthy": the rate
+  // just keeps climbing either way. This banner is what stops that from
+  // being mistaken for a broken controller mid-demo.
+  function updateTrafficBanner(requestsLast60s) {
+    const banner = document.getElementById("trafficBanner");
+    const icon = document.getElementById("trafficIcon");
+    const text = document.getElementById("trafficText");
+
+    if (requestsLast60s === null || requestsLast60s === undefined) {
+      banner.className = "traffic-banner unknown";
+      icon.textContent = "●";
+      text.innerHTML = "Protected-site fixture not configured yet.";
+      return;
+    }
+
+    if (requestsLast60s === 0) {
+      banner.className = "traffic-banner no-traffic";
+      icon.textContent = "⚠";
+      text.innerHTML = "No traffic in the last 60s — mode changes won't do anything visible. " +
+        "Run <code>python scripts/probe_protected_site.py --rate 3</code> before demoing.";
+    } else {
+      banner.className = "traffic-banner has-traffic";
+      icon.textContent = "●";
+      text.innerHTML = `<strong>${requestsLast60s}</strong> requests hit the fixture in the last 60s — the controller has something to react to.`;
     }
   }
 

@@ -257,12 +257,18 @@
   }
 
   let polling = false;
+  let consecutiveFailures = 0;
+  // Past this many back-to-back failed polls (~15s at the 3s interval),
+  // a "transient hiccup" stops being plausible and the visitor deserves
+  // an explicit error instead of an indefinitely blank screen.
+  const MAX_CONSECUTIVE_FAILURES = 5;
 
   async function poll(visitorNumber) {
     if (polling) return;
     polling = true;
     try {
       const status = await checkStatus(visitorNumber);
+      consecutiveFailures = 0;
 
       if (status.status === "admitted") {
         clearInterval(pollTimer);
@@ -279,8 +285,22 @@
         : `<strong>${status.position - 1}</strong> ${status.position - 1 === 1 ? "person" : "people"} ahead of you`;
     } catch (err) {
       console.error(err);
-      // Transient network hiccups shouldn't blow away the UI - just skip
-      // this tick and try again next interval.
+      consecutiveFailures += 1;
+
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        clearInterval(pollTimer);
+        showError("Lost connection to the queue. Reload this page to try again.");
+        return;
+      }
+
+      // A single transient network hiccup shouldn't blow away the UI - but
+      // it also shouldn't leave the visitor staring at a blank screen with
+      // no sign anything is happening. If we've never successfully shown a
+      // position yet, say so instead of silently doing nothing.
+      if (waitingEl.hidden) {
+        waitingEl.hidden = false;
+        subStatEl.textContent = "Connecting…";
+      }
     } finally {
       polling = false;
     }
