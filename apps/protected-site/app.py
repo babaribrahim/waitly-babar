@@ -81,7 +81,21 @@ def health():
     return {"status": "ok"}
 
 
+# Two routes, one handler. "/probe" exists only for CloudFront: rewriting
+# /fixture/ down to bare "/" turned out to collide with CloudFront's
+# default_root_object setting, which re-appends "index.html" to ANY
+# request whose path resolves to "/" - distribution-wide, regardless of
+# which origin actually handles it. The fixture has no "/index.html"
+# route, so that produced a genuine FastAPI 404 forwarded straight
+# through, not a caching artifact (confirmed live: CloudFront Functions'
+# own test-function API showed the rewrite producing the correct "/"
+# output in isolation, so the interference happens after the function
+# runs). "/probe" is never empty/root, so it can't trigger that path -
+# see cloudfront.tf's strip_fixture_prefix function, which targets this
+# route instead of "/". Real visitors and direct ALB testing still use
+# "/" exactly as before; nothing about this changes that.
 @app.get("/")
+@app.get("/probe")
 def index():
     mode = _mode  # no I/O on the request path - see module docstring
 

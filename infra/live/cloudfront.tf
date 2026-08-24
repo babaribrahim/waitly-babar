@@ -161,25 +161,33 @@ resource "aws_s3_object" "site" {
 }
 
 # --- CloudFront Function: strips the /fixture prefix before forwarding
-# to the protected-site fixture origin, whose real routes are "/" and
-# "/health" - the fixture app itself is unaware it's behind /fixture.
+# to the protected-site fixture origin, whose real routes are "/probe"
+# (mode-dependent, mirrors "/") and "/health" - the fixture app itself is
+# unaware it's behind /fixture.
+#
+# Root case rewrites to "/probe", NOT "/" - found live that rewriting to
+# bare "/" collided with CloudFront's default_root_object setting, which
+# re-appends "index.html" to ANY request whose path resolves to "/",
+# distribution-wide, regardless of which origin ends up handling it. The
+# fixture has no "/index.html" route, so that produced a real 404 from
+# the origin - confirmed via CloudFront's own test-function API, which
+# showed this function correctly producing "/" in isolation, so the
+# interference happens downstream of the function, not in it. See
+# apps/protected-site/app.py's matching "/probe" alias route.
 
 resource "aws_cloudfront_function" "strip_fixture_prefix" {
   name    = "${var.project}-strip-fixture-prefix"
   runtime = "cloudfront-js-2.0"
-  comment = "Rewrites /fixture/* -> /* before forwarding to the protected-site fixture origin"
+  comment = "Rewrites /fixture/* -> /probe or /* before forwarding to the protected-site fixture origin"
   publish = true
   code    = <<-EOT
     function handler(event) {
       var request = event.request;
       var uri = request.uri;
-      if (uri === "/fixture") {
-        request.uri = "/";
+      if (uri === "/fixture" || uri === "/fixture/") {
+        request.uri = "/probe";
       } else if (uri.indexOf("/fixture/") === 0) {
         request.uri = uri.substring("/fixture".length);
-        if (request.uri === "") {
-          request.uri = "/";
-        }
       }
       return request;
     }
