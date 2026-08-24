@@ -1,0 +1,76 @@
+version: 0.2
+# Buildspec for the Room Admin API's Lambda service - same path-based
+# build-skip idea as ecs_service_build.yml, but the build/publish/appspec
+# shape is different: no docker image, a zip pushed straight to Lambda,
+# and the appspec references a function/alias/version pair instead of an
+# ECS task definition. Mirrors scripts/deploy_lambda.py's own logic (zip,
+# update-function-code --publish, appspec with CurrentVersion/
+# TargetVersion) so the pipeline does exactly what the manual deploy
+# script already proved works.
+
+env:
+  shell: bash
+
+phases:
+  install:
+    commands:
+      - echo "Checking apps/$SERVICE_DIR for changes since the last successful build"
+      - CURRENT_HASH=$(find "apps/$SERVICE_DIR" -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+      - LAST_HASH=$(aws ssm get-parameter --name "$SSM_HASH_PARAM" --query "Parameter.Value" --output text --region "$AWS_DEFAULT_REGION" 2>/dev/null || echo "NONE")
+      - CURRENT_ALIAS_VERSION=$(aws lambda get-alias --function-name "$FUNCTION_NAME" --name "$ALIAS_NAME" --query "FunctionVersion" --output text --region "$AWS_DEFAULT_REGION")
+      - echo "current=$CURRENT_HASH last=$LAST_HASH alias_version=$CURRENT_ALIAS_VERSION"
+
+  pre_build:
+    commands:
+      - |
+        if [ "$CURRENT_HASH" = "$LAST_HASH" ]; then
+          echo "No changes under apps/$SERVICE_DIR - skipping publish."
+          BUILD_ACTION=SKIPPED
+          TARGET_VERSION=$CURRENT_ALIAS_VERSION
+        else
+          echo "Changes detected under apps/$SERVICE_DIR - publishing a new version."
+          BUILD_ACTION=BUILT
+        fi
+
+  build:
+    commands:
+      - |
+        if [ "$BUILD_ACTION" = "BUILT" ]; then
+          cd "apps/$SERVICE_DIR"
+          zip -r ../../function.zip . -x '*.pyc'
+          cd ../..
+          TARGET_VERSION=$(aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://function.zip \
+            --publish \
+            --query "Version" --output text \
+            --region "$AWS_DEFAULT_REGION")
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME" --qualifier "$TARGET_VERSION" --region "$AWS_DEFAULT_REGION"
+        fi
+      - echo "TARGET_VERSION=$TARGET_VERSION"
+
+  post_build:
+    commands:
+      - |
+        if [ "$BUILD_ACTION" = "BUILT" ]; then
+          aws ssm put-parameter --name "$SSM_HASH_PARAM" --value "$CURRENT_HASH" --type String --overwrite --region "$AWS_DEFAULT_REGION"
+        fi
+      - |
+        cat > appspec.yml << EOF
+        version: 0.0
+        Resources:
+          - RoomAdminFunction:
+              Type: AWS::Lambda::Function
+              Properties:
+                Name: "$FUNCTION_NAME"
+                Alias: "$ALIAS_NAME"
+                CurrentVersion: "$CURRENT_ALIAS_VERSION"
+                TargetVersion: "$TARGET_VERSION"
+        EOF
+      - echo "$BUILD_ACTION" > build_action.txt
+      - cat appspec.yml build_action.txt
+
+artifacts:
+  files:
+    - appspec.yml
+    - build_action.txt

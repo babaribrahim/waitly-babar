@@ -215,6 +215,14 @@ resource "aws_iam_role_policy" "codebuild" {
         Action   = ["ssm:GetParameter", "ssm:PutParameter"]
         Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project}/pipeline/*"
       },
+      {
+        # Room Admin API's buildspec (lambda_service_build.yml) publishes
+        # a new version directly - no ECS/CodeDeploy task-def registration
+        # step for Lambda the way there is for ECS.
+        Effect   = "Allow"
+        Action   = ["lambda:UpdateFunctionCode", "lambda:PublishVersion", "lambda:GetAlias", "lambda:GetFunction", "lambda:GetFunctionConfiguration"]
+        Resource = "arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.project}-room-admin-api*"
+      },
     ]
   })
 }
@@ -380,11 +388,52 @@ resource "aws_codebuild_project" "queue_controller" {
   tags = { Name = "${var.project}-queue-controller-build" }
 }
 
+# --- Room Admin API: CodeBuild project ---
+# Different buildspec (lambda_service_build.yml) - zips and publishes a
+# Lambda version directly instead of building a docker image.
+
+resource "aws_codebuild_project" "room_admin_api" {
+  name         = "${var.project}-room-admin-api-build"
+  service_role = aws_iam_role.codebuild.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    type                        = "LINUX_CONTAINER"
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/amazonlinux2-x86_64-standard:5.0"
+    image_pull_credentials_type = "CODEBUILD"
+    # No privileged_mode - no docker build for a Lambda zip deploy.
+
+    environment_variable {
+      name  = "SERVICE_DIR"
+      value = "room-admin-api"
+    }
+    environment_variable {
+      name  = "FUNCTION_NAME"
+      value = aws_lambda_function.room_admin_api.function_name
+    }
+    environment_variable {
+      name  = "ALIAS_NAME"
+      value = aws_lambda_alias.room_admin_api_live.name
+    }
+    environment_variable {
+      name  = "SSM_HASH_PARAM"
+      value = "/${var.project}/pipeline/room-admin-api/last-built-hash"
+    }
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = file("${path.module}/buildspecs/lambda_service_build.yml")
+  }
+
+  tags = { Name = "${var.project}-room-admin-api-build" }
+}
+
 # --- The pipeline itself ---
-# Room Admin API's stages aren't wired yet - deliberate, per the "get one
-# service working end to end before wiring the other two" build order.
-# It follows a different deploy mechanism (Lambda alias shift, not
-# CodeDeployToECS) once Queue Controller here is verified.
 
 resource "aws_codepipeline" "main" {
   name     = "${var.project}-pipeline"
@@ -494,6 +543,42 @@ resource "aws_codepipeline" "main" {
         AppSpecTemplatePath            = "appspec.yaml"
         Image1ArtifactName             = "queue_controller_build_output"
         Image1ContainerName            = "IMAGE1_NAME"
+      }
+    }
+  }
+
+  stage {
+    name = "Build-RoomAdminAPI"
+
+    action {
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source_output"]
+      output_artifacts = ["room_admin_api_build_output"]
+
+      configuration = {
+        ProjectName = aws_codebuild_project.room_admin_api.name
+      }
+    }
+  }
+
+  stage {
+    name = "Deploy-RoomAdminAPI"
+
+    action {
+      name            = "Deploy"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "CodeDeploy"
+      version         = "1"
+      input_artifacts = ["room_admin_api_build_output"]
+
+      configuration = {
+        ApplicationName     = aws_codedeploy_app.room_admin_api.name
+        DeploymentGroupName = aws_codedeploy_deployment_group.room_admin_api.deployment_group_name
       }
     }
   }
