@@ -186,6 +186,32 @@ resource "aws_cloudfront_function" "strip_fixture_prefix" {
   EOT
 }
 
+# S3 has no real "directory" concept - only literal keys exist
+# ("demo-control/index.html", not "demo-control/" or "demo-control").
+# default_root_object only covers the bucket root ("/"), not
+# sub-paths, so a bare /demo-control or /demo-control/ 403s against S3
+# with nothing to rewrite it. This appends index.html the same way
+# most static-site setups need to, for any path that looks like a
+# directory (ends in "/") or has no file extension.
+resource "aws_cloudfront_function" "append_index" {
+  name    = "${var.project}-append-index"
+  runtime = "cloudfront-js-2.0"
+  comment = "Appends index.html to directory-style requests before hitting the S3 origin"
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      if (uri.endsWith("/")) {
+        request.uri = uri + "index.html";
+      } else if (!uri.includes(".")) {
+        request.uri = uri + "/index.html";
+      }
+      return request;
+    }
+  EOT
+}
+
 # --- CloudFront distribution ---
 
 resource "aws_cloudfront_distribution" "site" {
@@ -234,6 +260,11 @@ resource "aws_cloudfront_distribution" "site" {
     cached_methods         = ["GET", "HEAD"]
     compress               = true
     cache_policy_id        = data.aws_cloudfront_cache_policy.caching_optimized.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.append_index.arn
+    }
   }
 
   # Admission API routes - /rooms/{roomId}/join|status|token - match the
@@ -271,6 +302,11 @@ resource "aws_cloudfront_distribution" "site" {
     cached_methods         = ["GET", "HEAD"]
     compress               = true
     cache_policy_id        = data.aws_cloudfront_cache_policy.caching_optimized.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.append_index.arn
+    }
   }
 
   restrictions {
