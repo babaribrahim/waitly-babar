@@ -1,0 +1,122 @@
+version: 0.2
+# Shared buildspec for every ECS Fargate service's CodeBuild project - see
+# scripts/deploy.py's docstring for the same "one generic script, no
+# per-service edits" philosophy. Per-service values (SERVICE_DIR,
+# ECR_REPO_URI, TASK_FAMILY, etc.) come in as CodeBuild project
+# environment variables, set per-project in codepipeline.tf.
+#
+# Path-based build skip: hashes the contents of apps/$SERVICE_DIR and
+# compares against the hash from the last successful build, stored in SSM
+# Parameter Store (CLAUDE.md allows SSM when something genuinely needs
+# it - this does, it's the only place that survives between separate
+# pipeline executions). Content hash, not `git diff` against a stored
+# commit SHA - deliberate: CodePipeline's default CODE_ZIP source
+# artifact has no .git history, and a content hash is arguably more
+# correct anyway (immune to force-pushes/rebases changing SHAs without
+# changing content).
+#
+# Known, deliberate limitation: this skips the BUILD (no docker
+# build/push) but NOT the Deploy stage - CodeDeploy still runs every
+# execution, redeploying the same image when nothing changed. Terraform's
+# AWS provider doesn't yet expose CodePipeline V2's native stage-skip
+# condition (open enhancement requests, hashicorp/terraform-provider-aws
+# #40454 and #39284) - implementing it would mean managing part of the
+# pipeline outside Terraform state. Documented gap, not an oversight -
+# same treatment as the DynamoDB single-counter tradeoff.
+
+env:
+  shell: bash
+
+phases:
+  install:
+    commands:
+      - echo "Checking apps/$SERVICE_DIR for changes since the last successful build"
+      - CURRENT_HASH=$(find "apps/$SERVICE_DIR" -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1)
+      - LAST_HASH=$(aws ssm get-parameter --name "$SSM_HASH_PARAM" --query "Parameter.Value" --output text --region "$AWS_DEFAULT_REGION" 2>/dev/null || echo "NONE")
+      - echo "current=$CURRENT_HASH last=$LAST_HASH"
+
+  pre_build:
+    commands:
+      - |
+        if [ "$CURRENT_HASH" = "$LAST_HASH" ]; then
+          echo "No changes under apps/$SERVICE_DIR - skipping docker build/push."
+          BUILD_ACTION=SKIPPED
+        else
+          echo "Changes detected under apps/$SERVICE_DIR - building."
+          BUILD_ACTION=BUILT
+          aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${ECR_REPO_URI%%/*}"
+        fi
+
+  build:
+    commands:
+      - |
+        if [ "$BUILD_ACTION" = "BUILT" ]; then
+          IMAGE_TAG="pipeline-${CODEBUILD_RESOLVED_SOURCE_VERSION:0:12}"
+          docker build -t "$ECR_REPO_URI:$IMAGE_TAG" "apps/$SERVICE_DIR"
+          docker push "$ECR_REPO_URI:$IMAGE_TAG"
+        else
+          IMAGE_TAG=$(aws ssm get-parameter --name "$SSM_IMAGE_TAG_PARAM" --query "Parameter.Value" --output text --region "$AWS_DEFAULT_REGION")
+          echo "Reusing previously built image tag: $IMAGE_TAG"
+        fi
+      - echo "IMAGE_TAG=$IMAGE_TAG"
+
+  post_build:
+    commands:
+      - |
+        if [ "$BUILD_ACTION" = "BUILT" ]; then
+          aws ssm put-parameter --name "$SSM_HASH_PARAM" --value "$CURRENT_HASH" --type String --overwrite --region "$AWS_DEFAULT_REGION"
+          aws ssm put-parameter --name "$SSM_IMAGE_TAG_PARAM" --value "$IMAGE_TAG" --type String --overwrite --region "$AWS_DEFAULT_REGION"
+        fi
+      - printf '{"ImageURI":"%s"}' "$ECR_REPO_URI:$IMAGE_TAG" > imageDetail.json
+      - |
+        cat > taskdef.json << EOF
+        {
+          "family": "$TASK_FAMILY",
+          "requiresCompatibilities": ["FARGATE"],
+          "networkMode": "awsvpc",
+          "cpu": "256",
+          "memory": "512",
+          "executionRoleArn": "$EXEC_ROLE_ARN",
+          "taskRoleArn": "$TASK_ROLE_ARN",
+          "containerDefinitions": [
+            {
+              "name": "$CONTAINER_NAME",
+              "image": "<IMAGE1_NAME>",
+              "essential": true,
+              "portMappings": [{"containerPort": $CONTAINER_PORT, "protocol": "tcp"}],
+              "environment": $CONTAINER_ENV_JSON,
+              "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                  "awslogs-group": "$LOG_GROUP",
+                  "awslogs-region": "$AWS_DEFAULT_REGION",
+                  "awslogs-stream-prefix": "$CONTAINER_NAME"
+                }
+              }
+            }
+          ]
+        }
+        EOF
+      - |
+        cat > appspec.yaml << EOF
+        version: 0.0
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: <TASK_DEFINITION>
+                LoadBalancerInfo:
+                  ContainerName: "$CONTAINER_NAME"
+                  ContainerPort: $CONTAINER_PORT
+        Hooks:
+          - AfterAllowTestTraffic: "$VALIDATION_LAMBDA_ARN"
+        EOF
+      - echo "$BUILD_ACTION" > build_action.txt
+      - cat taskdef.json appspec.yaml imageDetail.json build_action.txt
+
+artifacts:
+  files:
+    - imageDetail.json
+    - taskdef.json
+    - appspec.yaml
+    - build_action.txt
