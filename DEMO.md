@@ -140,9 +140,15 @@ everything *downstream* of it needing the same reset+seed sequence
 before a visitor demo means anything. So:
 
 - **Show room creation live** on Tab 3 (`/` → "+ New room" → fill in
-  name/protected URL/rate → real room, real admin key, real
+  name/rate, and for **Protected URL use exactly**
+  `https://waitly.internship.cloudelligent-sandbox.com/fixture/`
+  (trailing slash matters) → real room, real admin key, real
   `publicLink` shown - this was broken until today, see the bugfix
-  note below).
+  note below. Don't guess at this field live: only `/fixture/*` has a
+  CloudFront behavior routing to the ALB - anything else (`/protected/`
+  included - tried it live, got an S3 AccessDenied XML page) falls
+  through to the default behavior, which is the S3 frontend origin,
+  not the fixture.
 - **Do the actual "visitor waits and drains" beat on the pre-prepared
   `rEcu9I_C`**, not the room you just created live. Best of both: a
   genuine live creation, zero timing risk on the part that needs

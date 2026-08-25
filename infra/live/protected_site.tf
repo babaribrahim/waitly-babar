@@ -152,9 +152,17 @@ resource "aws_ecs_task_definition" "protected_site" {
 }
 
 # No deployment_controller block - defaults to plain ECS rolling
-# deployment. No CodeDeploy, no lifecycle ignore_changes on
-# task_definition: `terraform apply` after a task-def change (e.g. a new
-# image tag) is how this one redeploys. See scripts/deploy_protected_site.py.
+# deployment. No CodeDeploy, same as the comment used to say - but that
+# comment was wrong about ignore_changes, and it was a live bug, not
+# just stale docs: scripts/deploy_protected_site.py registers task
+# definitions OUT OF BAND (same pattern as scripts/deploy.py for the
+# other two services), then calls update-service directly. Without
+# ignore_changes here, every terraform apply on ANYTHING else in this
+# module was silently reverting the running service back to whatever
+# image tag this resource's own container_definitions still declared
+# (:v1) - found live 2026-08-24 when a real fix (deploy_protected_site.py
+# v2) kept vanishing after later, unrelated applies. Matches
+# admission_api.tf / queue_controller.tf's existing protection now.
 resource "aws_ecs_service" "protected_site" {
   name            = "${var.project}-protected-site"
   cluster         = aws_ecs_cluster.main.id
@@ -172,6 +180,10 @@ resource "aws_ecs_service" "protected_site" {
     target_group_arn = aws_lb_target_group.protected_site.arn
     container_name   = "protected-site"
     container_port   = 80
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
   }
 
   depends_on = [aws_lb_listener.protected_site]
