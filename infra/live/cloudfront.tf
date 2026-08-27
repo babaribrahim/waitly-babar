@@ -175,6 +175,35 @@ resource "aws_s3_object" "site" {
 # interference happens downstream of the function, not in it. See
 # apps/protected-site/app.py's matching "/probe" alias route.
 
+# --- CloudFront Function: strips the /admin prefix before forwarding to
+# the Room Admin API's API Gateway origin. Needed because the Room Admin
+# API's own routes ("/rooms", "/rooms/{roomId}", "/demo/*") collide with
+# the Admission API's existing "/rooms/*" behavior below - both services
+# happen to use "/rooms" as a prefix for unrelated things (visitor join
+# vs. organizer CRUD). "/admin/*" -> strip -> the real route, same
+# technique as strip_fixture_prefix above, not a new one. Nothing in the
+# frontend ever requests bare "/admin" or "/admin/", so the
+# default_root_object collision documented on strip_fixture_prefix
+# doesn't apply here in practice - noted, not expected to bite.
+resource "aws_cloudfront_function" "strip_admin_prefix" {
+  name    = "${var.project}-strip-admin-prefix"
+  runtime = "cloudfront-js-2.0"
+  comment = "Rewrites /admin/* -> /* before forwarding to the Room Admin API origin"
+  publish = true
+  code    = <<-EOT
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      if (uri === "/admin" || uri === "/admin/") {
+        request.uri = "/";
+      } else if (uri.indexOf("/admin/") === 0) {
+        request.uri = uri.substring("/admin".length);
+      }
+      return request;
+    }
+  EOT
+}
+
 resource "aws_cloudfront_function" "strip_fixture_prefix" {
   name    = "${var.project}-strip-fixture-prefix"
   runtime = "cloudfront-js-2.0"
@@ -261,6 +290,21 @@ resource "aws_cloudfront_distribution" "site" {
     }
   }
 
+  # Room Admin API - API Gateway already terminates TLS natively on its
+  # default execute-api domain, unlike the ALB origins above, so this one
+  # uses https-only rather than the http-only workaround they need.
+  origin {
+    domain_name = replace(aws_apigatewayv2_api.room_admin_api.api_endpoint, "https://", "")
+    origin_id   = "room-admin-api"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "https-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
   default_cache_behavior {
     target_origin_id       = "s3-frontend"
     viewer_protocol_policy = "redirect-to-https"
@@ -299,6 +343,37 @@ resource "aws_cloudfront_distribution" "site" {
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.strip_fixture_prefix.arn
+    }
+  }
+
+  # Room Admin API routes - /admin/rooms, /admin/rooms/{roomId},
+  # /admin/demo/* - see strip_admin_prefix's comment for why the /admin
+  # prefix (and the rewrite) exist at all: bare /rooms/* is already
+  # claimed by the Admission API above.
+  #
+  # Uses AllViewerExceptHostHeader, NOT AllViewer like the ALB behaviors
+  # above - found live that AllViewer forwards the viewer's original Host
+  # header ("waitly.internship...") to the origin unchanged. The ALB
+  # origins don't care (no host-based listener rules), but API Gateway's
+  # execute-api endpoint validates Host against its own domain and
+  # rejects anything else with a generic 403 {"message":"Forbidden"} -
+  # easy to mistake for an auth/permissions problem, it's actually just
+  # the wrong Host header reaching the origin. This policy omits Host
+  # from what's forwarded, so CloudFront sets it to match the origin's
+  # own domain_name automatically, same as it already does implicitly
+  # for the S3/ALB origins.
+  ordered_cache_behavior {
+    path_pattern             = "/admin/*"
+    target_origin_id         = "room-admin-api"
+    viewer_protocol_policy   = "https-only"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.strip_admin_prefix.arn
     }
   }
 
@@ -343,6 +418,12 @@ data "aws_cloudfront_cache_policy" "caching_disabled" {
 
 data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
+}
+
+# Used only for the Room Admin API behavior - see its comment for why
+# API Gateway needs Host excluded from what's forwarded.
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
 }
 
 # --- Route 53: one alias record in the SHARED zone, nothing else ---

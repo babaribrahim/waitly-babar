@@ -224,14 +224,6 @@
   <h1>Waitly &mdash; Demo Control</h1>
   <p class="subtitle">Not part of the real product UI. Toggle the protected site's health and watch the Queue Controller react, live.</p>
 
-  <div class="panel">
-    <h2 class="eyebrow">Room Admin API endpoint</h2>
-    <div class="row">
-      <input type="text" class="input mono" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
-      <button class="btn" id="saveApiBase">Save</button>
-    </div>
-  </div>
-
   <div class="traffic-banner unknown" id="trafficBanner">
     <span id="trafficIcon">&#9679;</span>
     <span id="trafficText">Checking for traffic&hellip;</span>
@@ -286,16 +278,10 @@
 </div>
 
 <script>
-  const apiBaseInput = document.getElementById("apiBase");
-  const saved = localStorage.getItem("waitly-demo-api-base");
-  if (saved) apiBaseInput.value = saved;
-
-  document.getElementById("saveApiBase").addEventListener("click", () => {
-    localStorage.setItem("waitly-demo-api-base", apiBaseInput.value.trim());
-  });
-
+  // Routed through CloudFront's /admin/* behavior (cloudfront.tf) - same
+  // origin as this page, nothing to paste or save.
   function apiBase() {
-    return apiBaseInput.value.trim().replace(/\/$/, "");
+    return "https://waitly.internship.cloudelligent-sandbox.com/admin";
   }
 
   function setActiveModeButton(mode) {

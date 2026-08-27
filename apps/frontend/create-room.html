@@ -75,8 +75,6 @@
   <div id="formView">
     <h1>Create a room</h1>
     <div class="panel">
-      <div id="apiWarning" class="warning" hidden>Set the Room Admin API endpoint on the <a href="index.html">rooms page</a> first.</div>
-
       <label for="name">Event name</label>
       <input class="input" id="name" placeholder="Friday night concert">
 
@@ -123,12 +121,11 @@
 
 <script src="assets/rooms-store.js"></script>
 <script>
+  // Routed through CloudFront's /admin/* behavior (cloudfront.tf) - same
+  // origin as this page, nothing to paste or save. See index.html's
+  // matching apiBase() for the same reasoning.
   function apiBase() {
-    return (localStorage.getItem("waitly-room-admin-api-base") || "").replace(/\/$/, "");
-  }
-
-  if (!apiBase()) {
-    document.getElementById("apiWarning").hidden = false;
+    return "https://waitly.internship.cloudelligent-sandbox.com/admin";
   }
 
   document.getElementById("submitBtn").addEventListener("click", async () => {
@@ -136,11 +133,6 @@
     errEl.textContent = "";
 
     const base = apiBase();
-    if (!base) {
-      errEl.textContent = "Set the Room Admin API endpoint on the rooms page first.";
-      return;
-    }
-
     const name = document.getElementById("name").value.trim();
     const protectedUrl = document.getElementById("protectedUrl").value.trim();
     const targetRate = parseInt(document.getElementById("targetRate").value, 10);

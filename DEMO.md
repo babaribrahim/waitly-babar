@@ -10,8 +10,8 @@ CLI-driven, and why).
 
 | What | Value |
 |---|---|
-| **The site** (frontend, demo-control, Admission API, fixture - all through here) | `https://waitly.internship.cloudelligent-sandbox.com` |
-| Room Admin API | `https://k2uj9et2rk.execute-api.us-west-2.amazonaws.com` |
+| **The site** (frontend, demo-control, Admission API, fixture, Room Admin API - all through here) | `https://waitly.internship.cloudelligent-sandbox.com` |
+| Room Admin API (raw, for scripting only) | `https://k2uj9et2rk.execute-api.us-west-2.amazonaws.com` |
 | CodePipeline console | `https://us-west-2.console.aws.amazon.com/codesuite/codepipeline/pipelines/waitly-pipeline/view?region=us-west-2` |
 | DynamoDB table | `waitly-table` (region `us-west-2`) |
 | Demo room ID | `rEcu9I_C` |
@@ -20,22 +20,24 @@ CLI-driven, and why).
 If any of these change (redeploy, new distribution, etc.), regenerate
 from `terraform -chdir=infra/live output -json`.
 
-Everything under the site domain is HTTPS, including the Admission API
-and protected-site fixture calls - those aren't reachable at the ALB's
-raw DNS name from a browser anymore (mixed content), they're routed
-through CloudFront's `/rooms/*` and `/fixture/*` behaviors. Only matters
-if you're scripting against them directly; the pages themselves already
-call the right URLs.
+Everything under the site domain is HTTPS, including the Admission API,
+protected-site fixture, and Room Admin API calls - none of these are
+reachable at their raw AWS-generated URLs from a browser anymore (mixed
+content for the first two; just an inconsistency worth not having for
+the third), they're routed through CloudFront's `/rooms/*`, `/fixture/*`,
+and `/admin/*` behaviors respectively. The frontend and demo-control
+pages have this baked in - no endpoint to paste anywhere anymore, that
+field is gone. Only matters if you're scripting directly against the raw
+API Gateway URL above.
 
 ## Browser tabs you need
 
 No terminals required for the demo itself.
 
 - **Tab 1 — demo-control**: `https://waitly.internship.cloudelligent-sandbox.com/demo-control/`
-  If the Room Admin API field is empty, paste the endpoint above and
-  click Save. Live view of mode, targetRate, waiting, admittedCount,
-  the traffic banner, and the two traffic-generator buttons - polls
-  every 2s.
+  Live view of mode, targetRate, waiting, admittedCount, the traffic
+  banner, and the two traffic-generator buttons - polls every 2s. No
+  setup step - open it and go.
 
 - **Tab 2 — visitor waiting screen**: opened fresh right before each
   demo beat that needs it, see below. It joins the instant it loads -
@@ -224,3 +226,17 @@ found pushes didn't reliably auto-trigger a new execution; manual
   --query Distribution.Status` should read `Deployed`. An explicit
   `aws cloudfront create-invalidation --distribution-id E1BGMNPYBES8IT
   --paths "/*"` clears anything stuck.
+- **Nothing responds at all - join/status/mode calls all fail**: check
+  the ECS services are actually running, don't assume they are:
+  `aws ecs describe-services --cluster waitly-cluster --services
+  waitly-admission-api waitly-queue-controller waitly-protected-site
+  --region us-west-2 --query "services[].[serviceName,desiredCount,
+  runningCount]"`. Happened for real on 2026-08-25: another intern
+  (`mkashif`, confirmed via CloudTrail) manually scaled all three to 0
+  in a shared-account cleanup, unrelated to this project - a one-off
+  manual action, not a scheduled policy, so it won't recur on a timer,
+  but it *could* happen again if someone does another sweep without
+  knowing these are live for a demo. If it happens again: `terraform
+  -chdir=infra/live apply` restores the declared desired_count (2/1/1)
+  for all three, then `aws ecs wait services-stable ...` before
+  trusting anything works.

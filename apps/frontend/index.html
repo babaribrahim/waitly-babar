@@ -79,14 +79,6 @@
   </header>
   <p class="subtitle">Your rooms, tracked in this browser. No login — the admin key from creation is what proves ownership.</p>
 
-  <div class="settings-panel panel">
-    <h2 class="eyebrow">Room Admin API endpoint</h2>
-    <div class="row">
-      <input type="text" class="input mono" id="apiBase" placeholder="https://xxxxxxxx.execute-api.us-west-2.amazonaws.com">
-      <button class="btn" id="saveApiBase">Save</button>
-    </div>
-  </div>
-
   <div class="rooms-grid" id="roomsGrid"></div>
 
   <div class="empty-state panel" id="emptyState" hidden>
@@ -97,15 +89,13 @@
 
 <script src="assets/rooms-store.js"></script>
 <script>
-  const apiBaseInput = document.getElementById("apiBase");
-  apiBaseInput.value = localStorage.getItem("waitly-room-admin-api-base") || "";
-  document.getElementById("saveApiBase").addEventListener("click", () => {
-    localStorage.setItem("waitly-room-admin-api-base", apiBaseInput.value.trim());
-    render();
-  });
-
+  // Routed through CloudFront's /admin/* behavior (cloudfront.tf), not
+  // the raw API Gateway URL - same origin as everything else on this
+  // page now, so there's nothing to paste or save. See join.html's
+  // DEFAULT_API_BASE comment for the same reasoning applied to the
+  // Admission API.
   function apiBase() {
-    return (localStorage.getItem("waitly-room-admin-api-base") || "").replace(/\/$/, "");
+    return "https://waitly.internship.cloudelligent-sandbox.com/admin";
   }
 
   async function fetchStats(room) {

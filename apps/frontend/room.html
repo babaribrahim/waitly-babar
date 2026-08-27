@@ -123,8 +123,11 @@
   const params = new URLSearchParams(location.search);
   const roomId = params.get("id");
 
+  // Routed through CloudFront's /admin/* behavior (cloudfront.tf) - same
+  // origin as this page, nothing to paste or save. See index.html's
+  // matching apiBase() for the same reasoning.
   function apiBase() {
-    return (localStorage.getItem("waitly-room-admin-api-base") || "").replace(/\/$/, "");
+    return "https://waitly.internship.cloudelligent-sandbox.com/admin";
   }
 
   if (!roomId) {
